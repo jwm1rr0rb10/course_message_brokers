@@ -1,0 +1,61 @@
+x-kafka-common: &kafka-common
+  # курс написан под 4.3.1; CI дополнительно гоняет примеры на свежем образе
+  image: ${KAFKA_IMAGE:-apache/kafka:4.3.1}
+  restart: unless-stopped
+  environment: &kafka-env
+    # один и тот же ID кластера на всех узлах (любая base64-строка из 16 байт)
+    CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
+    KAFKA_PROCESS_ROLES: "broker,controller"
+    KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
+    KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+    # надёжные значения по умолчанию для кластера из трёх узлов
+    KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+    KAFKA_MIN_INSYNC_REPLICAS: 2
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    KAFKA_NUM_PARTITIONS: 3
+    # без этого данные лягут в /tmp внутри контейнера, мимо тома
+    KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+services:
+  kafka-1:
+    <<: *kafka-common
+    container_name: kafka-1
+    ports: ["9092:9092"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: "INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-1:19092,EXTERNAL://localhost:9092"
+    volumes: [kafka1-data:/var/lib/kafka/data]
+
+  kafka-2:
+    <<: *kafka-common
+    container_name: kafka-2
+    ports: ["9192:9192"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: "INTERNAL://:19092,EXTERNAL://:9192,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-2:19092,EXTERNAL://localhost:9192"
+    volumes: [kafka2-data:/var/lib/kafka/data]
+
+  kafka-3:
+    <<: *kafka-common
+    container_name: kafka-3
+    ports: ["9292:9292"]
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: "INTERNAL://:19092,EXTERNAL://:9292,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-3:19092,EXTERNAL://localhost:9292"
+    volumes: [kafka3-data:/var/lib/kafka/data]
+
+volumes:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:

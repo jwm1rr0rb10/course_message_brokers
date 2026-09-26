@@ -1,0 +1,53 @@
+x-rabbit-common: &rabbit-common
+  # курс написан под 4.3; CI дополнительно гоняет примеры на свежем образе
+  image: ${RABBITMQ_IMAGE:-rabbitmq:4.3-management}
+  restart: unless-stopped
+  environment:
+    RABBITMQ_DEFAULT_USER: admin
+    RABBITMQ_DEFAULT_PASS: admin
+    # общий секрет узлов кластера; в продакшене — длинная случайная строка из секрета
+    RABBITMQ_COOKIE: "course-secret-cookie"
+  # записать cookie в файл до старта: образ сам выставит владельца и права
+  entrypoint:
+    - /bin/sh
+    - -c
+    - |
+      echo "$$RABBITMQ_COOKIE" > /var/lib/rabbitmq/.erlang.cookie
+      chmod 400 /var/lib/rabbitmq/.erlang.cookie
+      exec docker-entrypoint.sh rabbitmq-server
+
+services:
+  rabbit-1:
+    <<: *rabbit-common
+    hostname: rabbit-1
+    container_name: rabbit-1
+    ports: ["5672:5672", "15672:15672", "15692:15692", "5552:5552"]
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - rabbit1-data:/var/lib/rabbitmq
+
+  rabbit-2:
+    <<: *rabbit-common
+    hostname: rabbit-2
+    container_name: rabbit-2
+    ports: ["5673:5672", "15673:15672"]
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - rabbit2-data:/var/lib/rabbitmq
+
+  rabbit-3:
+    <<: *rabbit-common
+    hostname: rabbit-3
+    container_name: rabbit-3
+    ports: ["5674:5672", "15674:15672"]
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - rabbit3-data:/var/lib/rabbitmq
+
+volumes:
+  rabbit1-data:
+  rabbit2-data:
+  rabbit3-data:

@@ -1,0 +1,43 @@
+x-nats-common: &nats-common
+  # the course pins 2.12; CI also runs the examples against newer images
+  image: ${NATS_IMAGE:-nats:2.12-alpine}
+  restart: unless-stopped
+
+services:
+  nats-1:
+    <<: *nats-common
+    container_name: nats-1
+    command: ["-c", "/etc/nats/nats.conf", "--server_name", "nats-1"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats1-data:/data
+
+  nats-2:
+    <<: *nats-common
+    container_name: nats-2
+    command: ["-c", "/etc/nats/nats.conf", "--server_name", "nats-2"]
+    ports: ["4223:4222", "8223:8222"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats2-data:/data
+
+  nats-3:
+    <<: *nats-common
+    container_name: nats-3
+    command: ["-c", "/etc/nats/nats.conf", "--server_name", "nats-3"]
+    ports: ["4224:4222", "8224:8222"]
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats3-data:/data
+
+  nats-box:
+    image: natsio/nats-box:latest
+    container_name: nats-box
+    entrypoint: ["sleep", "infinity"]
+    depends_on: [nats-1, nats-2, nats-3]
+
+volumes:
+  nats1-data:
+  nats2-data:
+  nats3-data:

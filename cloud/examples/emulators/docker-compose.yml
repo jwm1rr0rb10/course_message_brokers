@@ -1,0 +1,30 @@
+services:
+  # AWS: SQS, SNS, EventBridge через moto (open source, без токена)
+  aws:
+    image: motoserver/moto:latest
+    ports: ["4566:5000"]
+
+  # Google Cloud Pub/Sub
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=course-project
+    ports: ["8085:8085"]
+
+  # Azure Service Bus emulator; сущности создаются из servicebus-config.json
+  servicebus:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    depends_on: [sql]
+    ports: ["5672:5672", "5300:5300"]
+    environment:
+      ACCEPT_EULA: "Y"
+      SQL_SERVER: sql
+      MSSQL_SA_PASSWORD: "Course_Passw0rd!"
+    volumes:
+      - ./servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+
+  # база метаданных для эмулятора Service Bus (Azure SQL Edge выведена из эксплуатации)
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Course_Passw0rd!"

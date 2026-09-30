@@ -1,0 +1,268 @@
+# Checks the course examples and the claims the course makes about broker
+# behaviour. Runs on every push and pull request, and weekly so that a new
+# broker release that changes documented behaviour turns the build red.
+#
+# Every broker job runs twice: on the image pinned in docker-compose.yml
+# (image: ${X_IMAGE:-pinned}) and on the newest image.
+name: examples
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: examples-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # No Docker: vet, unit tests, and the tests that run on in-process brokers
+  # (embedded nats-server for NATS, kfake for Kafka).
+  static:
+    name: static (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - nats/examples/go
+          - kafka/examples/go
+          - rabbit/examples/go
+          - cloud/examples/go
+          - cloud/examples/go-gcp
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.dir }}/go.mod
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+      - name: test
+        run: go test -count=1 ./...
+      - name: kafka tests on kfake
+        if: matrix.dir == 'kafka/examples/go'
+        run: KAFKA_FAKE=1 go test -tags integration -count=1 ./...
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: python syntax
+        run: python -m py_compile $(git ls-files '*.py')
+      - name: shell syntax
+        run: for f in $(git ls-files '*.sh'); do bash -n "$f"; done
+      - name: shellcheck
+        run: shellcheck --severity=error $(git ls-files '*.sh')
+
+  nats:
+    name: nats (${{ matrix.image || 'pinned' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["", "nats:alpine"]
+    env:
+      NATS_IMAGE: ${{ matrix.image }}
+      COURSE_REQUIRE_BROKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: nats/examples/go/go.mod
+          cache-dependency-path: nats/examples/go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install nats CLI
+        run: go install github.com/nats-io/natscli/nats@v0.5.0
+      - name: start cluster
+        working-directory: nats/examples/cluster
+        run: |
+          docker compose up -d
+          timeout 120 sh -c 'until curl -sf localhost:8222/healthz?js-enabled-only=true; do sleep 2; done'
+      - name: smoke test
+        run: nats/examples/scripts/smoke-test.sh
+      - name: integration tests on the cluster
+        working-directory: nats/examples/go
+        env:
+          NATS_URL: nats://localhost:4222,nats://localhost:4223,nats://localhost:4224
+        run: go test -count=1 ./...
+      - name: python checks
+        working-directory: nats/examples/python
+        run: |
+          pip install -r requirements.txt
+          python check.py
+      - name: logs on failure
+        if: failure()
+        working-directory: nats/examples/cluster
+        run: docker compose logs --tail=200
+      - name: stop cluster
+        if: always()
+        working-directory: nats/examples/cluster
+        run: docker compose down -v
+
+  kafka:
+    name: kafka (${{ matrix.image || 'pinned' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["", "apache/kafka:latest"]
+    env:
+      KAFKA_IMAGE: ${{ matrix.image }}
+      COURSE_REQUIRE_BROKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kafka/examples/go/go.mod
+          cache-dependency-path: kafka/examples/go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: start cluster
+        working-directory: kafka/examples/cluster
+        run: docker compose up -d
+      - name: build kprobe
+        working-directory: kafka/examples/go
+        run: go build -o "$RUNNER_TEMP/kprobe" ./cmd/kprobe
+      - name: smoke test (waits for the cluster itself)
+        working-directory: kafka
+        run: KPROBE="$RUNNER_TEMP/kprobe" ./examples/scripts/smoke-test.sh
+      - name: integration tests on the cluster
+        working-directory: kafka/examples/go
+        run: go test -tags integration -count=1 -timeout 10m ./...
+      - name: python checks
+        working-directory: kafka/examples/python
+        run: |
+          pip install -r requirements.txt
+          python check.py
+      - name: logs on failure
+        if: failure()
+        working-directory: kafka/examples/cluster
+        run: docker compose logs --tail=200
+      - name: stop cluster
+        if: always()
+        working-directory: kafka/examples/cluster
+        run: docker compose down -v
+
+  rabbit:
+    name: rabbitmq (${{ matrix.image || 'pinned' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["", "rabbitmq:management"]
+    env:
+      RABBITMQ_IMAGE: ${{ matrix.image }}
+      COURSE_REQUIRE_BROKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: rabbit/examples/go/go.mod
+          cache-dependency-path: rabbit/examples/go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: start cluster
+        working-directory: rabbit/examples/cluster
+        run: |
+          docker compose up -d
+          timeout 180 sh -c 'until docker exec rabbit-1 rabbitmq-diagnostics -q check_port_connectivity; do sleep 3; done'
+      - name: smoke test
+        working-directory: rabbit/examples
+        run: ./scripts/smoke-test.sh
+      - name: integration tests on the cluster
+        working-directory: rabbit/examples/go
+        run: go test -tags integration -count=1 -timeout 10m ./...
+      - name: python checks
+        working-directory: rabbit/examples/python
+        run: |
+          pip install -r requirements.txt
+          python check.py
+      - name: logs on failure
+        if: failure()
+        working-directory: rabbit/examples/cluster
+        run: docker compose logs --tail=200
+      - name: stop cluster
+        if: always()
+        working-directory: rabbit/examples/cluster
+        run: docker compose down -v
+
+  cloud:
+    name: cloud emulators (${{ matrix.images }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        images: [pinned, latest]
+    env:
+      COURSE_REQUIRE_BROKER: "1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: eu-central-1
+      AWS_ENDPOINT_URL: http://localhost:4566
+      PUBSUB_EMULATOR_HOST: localhost:8085
+      PUBSUB_PROJECT_ID: course-project
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cloud/examples/go/go.mod
+          cache-dependency-path: |
+            cloud/examples/go/go.sum
+            cloud/examples/go-gcp/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: use latest images
+        if: matrix.images == 'latest'
+        run: |
+          {
+            echo "MOTO_IMAGE=motoserver/moto:latest"
+            echo "PUBSUB_IMAGE=gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"
+            echo "SERVICEBUS_IMAGE=mcr.microsoft.com/azure-messaging/servicebus-emulator:latest"
+            echo "MSSQL_IMAGE=mcr.microsoft.com/mssql/server:2022-latest"
+          } >> "$GITHUB_ENV"
+      - name: start emulators
+        working-directory: cloud/examples/emulators
+        run: |
+          docker compose up -d --wait
+          timeout 180 sh -c 'until curl -sf http://localhost:5300/health; do sleep 2; done'
+      - name: go tests (AWS, Azure)
+        working-directory: cloud/examples/go
+        run: go test -tags integration -count=1 -v ./...
+      - name: go tests (GCP)
+        working-directory: cloud/examples/go-gcp
+        run: go test -tags integration -count=1 -v ./...
+      - name: python tests
+        working-directory: cloud/examples/python
+        run: |
+          pip install -r requirements.txt
+          python -m pytest -v -rs
+      - name: logs on failure
+        if: failure()
+        working-directory: cloud/examples/emulators
+        run: docker compose logs --tail=200
+      - name: stop emulators
+        if: always()
+        working-directory: cloud/examples/emulators
+        run: docker compose down -v

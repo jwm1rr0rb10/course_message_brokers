@@ -35,6 +35,17 @@ class TemporaryError(Exception):
     pass
 
 
+# client-side retry schedule for transient errors (module 6.4): the first
+# failure waits 1s, the second 5s, ...; the last value repeats. Plain nak()
+# would redeliver immediately, and a server-side backoff only applies when
+# ack_wait expires, not to naks.
+RETRY_DELAYS = [1, 5, 30, 60]  # seconds
+
+
+def retry_delay(num_delivered: int) -> int:
+    return RETRY_DELAYS[min(max(num_delivered, 1), len(RETRY_DELAYS)) - 1]
+
+
 async def process(data: bytes) -> None:
     order = json.loads(data)  # raises on invalid JSON -> Term
     print("processed", order["order_id"])
@@ -55,7 +66,7 @@ async def main() -> None:
 
     for i in range(1, 4):
         ack = await publish_with_retry(
-        js,
+            js,
             "py.orders.created",
             json.dumps({"order_id": f"order-{i}"}).encode(),
             headers={"Nats-Msg-Id": f"order-{i}-created"},
@@ -79,7 +90,7 @@ async def main() -> None:
             await process(msg.data)
             await msg.ack()
         except TemporaryError:
-            await msg.nak(delay=5)
+            await msg.nak(delay=retry_delay(msg.metadata.num_delivered))
         except Exception:
             await msg.term()
 

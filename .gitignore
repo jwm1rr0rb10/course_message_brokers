@@ -1,0 +1,14 @@
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Go
+coverage.out
+*.test

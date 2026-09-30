@@ -13,6 +13,7 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
@@ -43,12 +44,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer cl.Close() // leaves the group right away
+	// Leaves the group right away. With BlockRebalanceOnPoll a plain Close can
+	// hang if the last poll is still holding a rebalance, hence ...AllowingRebalance.
+	defer cl.CloseAllowingRebalance()
 
 	for {
 		fetches := cl.PollFetches(ctx)
 		if fetches.IsClientClosed() || ctx.Err() != nil {
-			return
+			return // whatever this poll returned is not committed: it is re-read after restart
 		}
 		fetches.EachError(func(t string, p int32, err error) {
 			log.Printf("fetch error %s/%d: %v", t, p, err)
@@ -66,16 +69,47 @@ func main() {
 
 		// DLQ first, commit second: a crash in between means reprocessing, not loss
 		if len(dead) > 0 {
-			if err := cl.ProduceSync(ctx, dead...).FirstErr(); err != nil {
-				log.Printf("DLQ write failed, not committing: %v", err)
-				cl.AllowRebalance()
-				continue
+			if err := writeDLQ(ctx, cl, dead); err != nil {
+				// Never skip the batch: the next commit would move past the poison
+				// record and lose it. Exit uncommitted; the batch is re-read on restart.
+				log.Printf("DLQ write failed, exiting without commit: %v", err)
+				return
 			}
 			log.Printf("%d message(s) moved to DLQ", len(dead))
 		}
-		if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+		// ctx may already be cancelled (SIGTERM) while the batch was processed:
+		// the batch is done, so commit it anyway with a context of its own.
+		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		if err := cl.CommitUncommittedOffsets(commitCtx); err != nil {
 			log.Println("commit:", err)
 		}
+		cancel()
 		cl.AllowRebalance()
+	}
+}
+
+// writeDLQ retries until the DLQ accepts every record or ctx is done. A retry
+// after a partial failure may duplicate records in the DLQ, which is fine: the
+// DLQ is at-least-once like everything else. While we retry, rebalances stay
+// blocked; if that exceeds the rebalance timeout the member is kicked out and
+// the commit fails, which again means reprocessing, not loss.
+func writeDLQ(ctx context.Context, cl *kgo.Client, recs []*kgo.Record) error {
+	backoff := time.Second
+	for {
+		fresh := make([]*kgo.Record, len(recs)) // new records per attempt, nothing left from the failed one
+		for i, r := range recs {
+			fresh[i] = &kgo.Record{Topic: r.Topic, Key: r.Key, Value: r.Value, Headers: r.Headers}
+		}
+		err := cl.ProduceSync(ctx, fresh...).FirstErr()
+		if err == nil {
+			return nil
+		}
+		log.Printf("DLQ write failed, retrying in %v: %v", backoff, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, 30*time.Second)
 	}
 }

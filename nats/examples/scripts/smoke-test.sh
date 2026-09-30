@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Runs the commands from the course against the 3-node cluster and checks that
-# they behave the way the course says they do.
+# they behave the way the course says they do. Non-interactive: exits 0 when
+# every check passes and non-zero on the first failure, so CI can run it right
+# after `docker compose up -d` (works with bash 3.2 on macOS).
+#
+#   cd examples/cluster && docker compose up -d        # pinned image
+#   NATS_IMAGE=nats:alpine docker compose up -d         # or the newest release
+#   ../scripts/smoke-test.sh
 #
 # Environment:
+#   NATS_CLI         nats CLI binary (default: nats)
 #   NATS_URLS        client URLs (default: the three localhost ports)
 #   MONITOR_URL      monitoring endpoint of one node (default http://localhost:8222)
 #   STOP_NODE_CMD    command to stop a node, "{node}" is replaced by its name
@@ -12,6 +19,7 @@
 # Local:   STOP_NODE_CMD='./scripts/local-cluster.sh stop-node {node}' ...
 set -euo pipefail
 
+NATS_CLI="${NATS_CLI:-nats}"
 NATS_URLS="${NATS_URLS:-nats://localhost:4222,nats://localhost:4223,nats://localhost:4224}"
 MONITOR_URL="${MONITOR_URL:-http://localhost:8222}"
 DEFAULT_STOP='docker stop {node}'
@@ -19,8 +27,18 @@ DEFAULT_START='docker start {node}'
 STOP_NODE_CMD="${STOP_NODE_CMD:-$DEFAULT_STOP}"
 START_NODE_CMD="${START_NODE_CMD:-$DEFAULT_START}"
 
-app()  { nats -s "$NATS_URLS" "$@"; }
-sys()  { nats -s "$NATS_URLS" --user admin --password admin "$@"; }
+app()  { "$NATS_CLI" -s "$NATS_URLS" "$@"; }
+sys()  { "$NATS_CLI" -s "$NATS_URLS" --user admin --password admin "$@"; }
+# number of distinct servers answering `nats server list`
+nservers() {
+  sys server list 3 --json 2>/dev/null \
+    | python3 -c 'import sys,json; print(len({s["server"]["name"] for s in json.load(sys.stdin)}))' 2>/dev/null \
+    || echo 0
+}
+
+command -v "$NATS_CLI" >/dev/null 2>&1 || { echo "nats CLI not found (set NATS_CLI)" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "curl not found" >&2; exit 1; }
 json() { python3 -c 'import sys,json; d=json.load(sys.stdin); print(eval("d"+sys.argv[1]))' "$1"; }
 
 PASS=0
@@ -35,9 +53,10 @@ for i in $(seq 1 60); do
   [[ $i == 60 ]] && fail "cluster not ready after 60s"
   sleep 1
 done
-servers=$(sys server list 2>/dev/null | grep -cE '│ nats-[123] ' || true)
+servers=$(nservers)
 [[ "$servers" == 3 ]] || fail "expected 3 servers in 'nats server list', got $servers"
-ok "3 servers, JetStream ready (module 2.5)"
+version=$(curl -fsS "$MONITOR_URL/varz" | json '["version"]')
+ok "3 servers running nats-server $version, JetStream ready (module 2.5)"
 
 # clean state so the script can be re-run
 for s in ORDERS ORDERS_ARCHIVE; do app stream rm "$s" -f >/dev/null 2>&1 || true; done
@@ -52,7 +71,7 @@ ok "message published with no subscriber was not delivered later"
 
 # ---------------------------------------------------------------------------
 step "request-reply and 'no responders' (2.4, 4.8)"
-nats -s "$NATS_URLS" reply service.echo --echo >/dev/null 2>&1 &
+"$NATS_CLI" -s "$NATS_URLS" reply service.echo --echo >/dev/null 2>&1 &
 REPLY_PID=$!
 trap 'kill "$REPLY_PID" 2>/dev/null || true' EXIT
 sleep 1
@@ -125,7 +144,8 @@ ok "max_deliver (3) <= backoff steps (5) rejected, as the course says"
 
 # ---------------------------------------------------------------------------
 step "mirror with a filter from a JSON config (13.2)"
-cat > /tmp/orders-archive.json <<'JSON'
+ARCHIVE_JSON="${TMPDIR:-/tmp}/orders-archive.$$.json"
+cat > "$ARCHIVE_JSON" <<'JSON'
 {
   "name": "ORDERS_ARCHIVE",
   "storage": "file",
@@ -137,7 +157,8 @@ cat > /tmp/orders-archive.json <<'JSON'
   }
 }
 JSON
-app stream add ORDERS_ARCHIVE --config /tmp/orders-archive.json >/dev/null 2>&1
+app stream add ORDERS_ARCHIVE --config "$ARCHIVE_JSON" >/dev/null 2>&1
+rm -f "$ARCHIVE_JSON"
 for i in $(seq 1 20); do
   m=$(app stream info ORDERS_ARCHIVE --json | json '["state"]["messages"]')
   [[ "$m" == 10 ]] && break
@@ -180,7 +201,7 @@ app pub shop.orders.created '{"order_id":"after-failover"}' >/dev/null 2>&1
 ok "new leader $new, 11 messages intact, publishing works"
 eval "${START_NODE_CMD//\{node\}/$leader}" >/dev/null
 for i in $(seq 1 60); do
-  n=$(sys server list 2>/dev/null | grep -cE '│ nats-[123] ' || true)
+  n=$(nservers)
   [[ "$n" == 3 ]] && break
   sleep 1
 done

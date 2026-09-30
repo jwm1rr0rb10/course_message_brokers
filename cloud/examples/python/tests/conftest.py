@@ -1,4 +1,5 @@
-"""Shared helpers. Each cloud's tests skip themselves if its emulator is not reachable."""
+"""Shared helpers. Each cloud's tests skip themselves if its emulator is not reachable
+(or fail, if COURSE_REQUIRE_BROKER=1 as in CI)."""
 import os
 import socket
 import uuid
@@ -31,4 +32,7 @@ SERVICEBUS_CONN = os.environ.get(
 def require(host_port: str, what: str):
     u = urlparse(host_port if "://" in host_port else f"tcp://{host_port}")
     if not reachable(u.hostname, u.port):
-        pytest.skip(f"{what} emulator is not running on {u.hostname}:{u.port}")
+        msg = f"{what} emulator is not running on {u.hostname}:{u.port}"
+        if os.environ.get("COURSE_REQUIRE_BROKER") == "1":
+            pytest.fail(f"{msg} (COURSE_REQUIRE_BROKER=1)")
+        pytest.skip(msg)

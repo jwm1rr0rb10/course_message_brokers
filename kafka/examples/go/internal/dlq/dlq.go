@@ -3,6 +3,7 @@
 package dlq
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -14,16 +15,17 @@ func Topic(source string) string { return source + ".dlq" }
 
 // Record builds the DLQ record for a failed source record.
 func Record(r *kgo.Record, group string, cause error, attempts int) *kgo.Record {
-	headers := make([]kgo.RecordHeader, 0, len(r.Headers)+7)
+	headers := make([]kgo.RecordHeader, 0, len(r.Headers)+8)
 	headers = append(headers, r.Headers...) // keep the original headers
-	msg := "<nil>"
+	msg, class := "<nil>", "<nil>"
 	if cause != nil {
-		msg = cause.Error()
+		msg, class = cause.Error(), fmt.Sprintf("%T", cause) // Go's analogue of the exception class
 	}
 	headers = append(headers,
 		kgo.RecordHeader{Key: "dlq-original-topic", Value: []byte(r.Topic)},
 		kgo.RecordHeader{Key: "dlq-original-partition", Value: []byte(strconv.Itoa(int(r.Partition)))},
 		kgo.RecordHeader{Key: "dlq-original-offset", Value: []byte(strconv.FormatInt(r.Offset, 10))},
+		kgo.RecordHeader{Key: "dlq-error-class", Value: []byte(class)},
 		kgo.RecordHeader{Key: "dlq-error-message", Value: []byte(msg)},
 		kgo.RecordHeader{Key: "dlq-attempts", Value: []byte(strconv.Itoa(attempts))},
 		kgo.RecordHeader{Key: "dlq-consumer-group", Value: []byte(group)},

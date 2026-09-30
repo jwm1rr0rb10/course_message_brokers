@@ -96,7 +96,7 @@
 
 **Версия:** все примеры написаны для Apache Kafka 4.3, образ `apache/kafka:4.3.1`. С версии 4.0 Kafka работает **только в режиме KRaft**: ZooKeeper удалён полностью, а не просто объявлен устаревшим.
 
-**Запускаемые примеры:** кластер, смок-тест команд CLI, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI каждую неделю прогоняет их на 4.3.1 и на свежем образе Kafka, так что если новая версия изменит описанное здесь поведение, сборка покраснеет.
+**Запускаемые примеры:** кластер, смок-тест команд CLI, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI ([`.github/workflows/examples.yml`](../.github/workflows/examples.yml)) на каждый push и раз в неделю по расписанию прогоняет `go vet`, unit-тесты, смок-тест и интеграционные тесты на кластере из `docker-compose.yml` — на 4.3.1 и на самом свежем образе Kafka, так что если новая версия изменит описанное здесь поведение, сборка покраснеет.
 
 ---
 
@@ -381,7 +381,7 @@ partition 2  [follower]        [follower]       [LEADER]
 
 ## 1.6 KRaft: кластер без ZooKeeper
 
-До версии 3.x метаданные кластера (какие топики есть, где лидеры, какие настройки) хранились в ZooKeeper. С Kafka 4.0 ZooKeeper **удалён**, метаданные хранит сама Kafka в режиме **KRaft** (Kafka Raft):
+Раньше метаданные кластера (какие топики есть, где лидеры, какие настройки) хранились в ZooKeeper. KRaft готов к production с версии 3.3, в 3.5 ZooKeeper объявлен устаревшим, а с Kafka 4.0 он **удалён**, метаданные хранит сама Kafka в режиме **KRaft** (Kafka Raft):
 
 ```
 +---------------- KRaft-кворум контроллеров ---------------+
@@ -430,7 +430,7 @@ consumer group "billing" (2 экземпляра)     consumer group "analytics"
 | **Log end offset (LEO)** | Offset, который получит следующая запись |
 | **High watermark (HW)** | До какого offset данные есть во всех ISR; консьюмеры видят только до HW |
 | **Committed offset** | До какого места группа сообщила, что обработала |
-| **Lag** | `LEO − committed offset`: сколько сообщений группа ещё не обработала |
+| **Lag** | `HW − committed offset` (для `read_committed` — LSO, last stable offset: граница перед первой незавершённой транзакцией): сколько доступных сообщений группа ещё не обработала |
 
 **Lag — главная метрика потребителя.** Растёт lag — консьюмер не справляется или стоит.
 
@@ -501,7 +501,7 @@ x-kafka-common: &kafka-common
   image: apache/kafka:4.3.1
   restart: unless-stopped
   environment: &kafka-env
-    # один и тот же ID кластера на всех узлах (любая base64-строка из 16 байт)
+    # один и тот же ID кластера на всех узлах: 16 байт в base64url без padding (22 символа)
     CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
     KAFKA_PROCESS_ROLES: "broker,controller"
     KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
@@ -1149,7 +1149,7 @@ Committed offset — это **номер следующего сообщения
 
 | Способ | Как | Риск |
 |---|---|---|
-| Автокоммит (по умолчанию) | Каждые `auto.commit.interval.ms` (5 с) во время `poll()` | Коммит может уйти раньше, чем закончилась обработка |
+| Автокоммит (по умолчанию) | Каждые `auto.commit.interval.ms` (5 с) во время `poll()`: коммитятся offsets, выданные **предыдущим** `poll()` | При синхронной обработке в цикле poll — at-least-once (после падения — повторы за последние секунды). Потеря — только если обработка асинхронная или передана в другой поток: тогда коммит может обогнать её |
 | Ручной синхронный | `commitSync()` после обработки | Задержка на каждый коммит |
 | Ручной асинхронный | `commitAsync()` | Нужно обрабатывать ошибки; финальный `commitSync()` при остановке |
 
@@ -1197,7 +1197,14 @@ public class BillingConsumer {
         props.put(ConsumerConfig.GROUP_PROTOCOL_CONFIG, "consumer");
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
-            Runtime.getRuntime().addShutdownHook(new Thread(consumer::wakeup));
+            Thread mainThread = Thread.currentThread();
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                consumer.wakeup();       // прервать poll() в основном потоке
+                try {
+                    mainThread.join();   // дождаться close(), иначе JVM завершится раньше
+                } catch (InterruptedException ignored) {
+                }
+            }));
             consumer.subscribe(List.of("shop.orders.events"));
             try {
                 while (true) {
@@ -1237,12 +1244,13 @@ cl, err := kgo.NewClient(
 if err != nil {
 	log.Fatal(err)
 }
-defer cl.Close()
+// с BlockRebalanceOnPoll обычный Close() может зависнуть, если пачка не отпущена
+defer cl.CloseAllowingRebalance()
 
 for {
 	fetches := cl.PollFetches(ctx)
 	if fetches.IsClientClosed() || ctx.Err() != nil {
-		return
+		return // необработанная пачка не закоммичена: её перечитают
 	}
 	fetches.EachError(func(topic string, p int32, err error) {
 		log.Printf("fetch error %s/%d: %v", topic, p, err)
@@ -1250,9 +1258,12 @@ for {
 	fetches.EachRecord(func(r *kgo.Record) {
 		process(r) // идемпотентно
 	})
-	if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+	// ctx мог отмениться (SIGTERM) во время обработки: пачку всё равно коммитим
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	if err := cl.CommitUncommittedOffsets(commitCtx); err != nil {
 		log.Println("commit:", err)
 	}
+	cancel()
 	cl.AllowRebalance() // пачка обработана и закоммичена, теперь можно
 }
 ```
@@ -1316,7 +1327,7 @@ group.remote.assignor=uniform
 - `session.timeout.ms` и `heartbeat.interval.ms` задаются на брокере (`group.consumer.session.timeout.ms`, `group.consumer.heartbeat.interval.ms`), а не в клиенте;
 - `partition.assignment.strategy` на клиенте больше не используется.
 
-В Kafka 4.3 Java-консьюмер с классическим протоколом пишет в лог предупреждение и рекомендует перейти на новый протокол: `classic` готовят к удалению. Проверь поддержку KIP-848 в своей клиентской библиотеке, если пишешь не на Java.
+В Kafka 4.3 Java-консьюмер группы с классическим протоколом при старте пишет в лог (уровень INFO) баннер с предложением попробовать новый протокол. Устаревшим `classic` при этом не объявлен и пока остаётся значением `group.protocol` по умолчанию. Проверь поддержку KIP-848 в своей клиентской библиотеке, если пишешь не на Java.
 
 ## 5.8 Как избежать лишних ребалансировок
 
@@ -1366,7 +1377,7 @@ kt kafka-consumer-groups.sh --bootstrap-server kafka-1:19092 --delete --group bi
 ### Вопросы для самопроверки
 
 1. Что именно хранит committed offset: номер последнего обработанного или следующего сообщения?
-2. Почему автокоммит может привести к потере сообщений?
+2. Почему автокоммит безопасен при синхронной обработке в цикле `poll()`, но может потерять сообщения при асинхронной?
 3. Когда срабатывает `auto.offset.reset`, и почему он не помогает перечитать данные существующей группы?
 4. Чем новый протокол consumer groups отличается от классического?
 5. Зачем нужен `group.instance.id`?
@@ -1775,7 +1786,7 @@ producer --(acks=all)--> лидер партиции (broker-1)
 
 Оставляй `false` для всего, что важно. `true` допустимо только для данных, где доступность важнее полноты (некоторые логи и метрики).
 
-В Kafka 4.x развивается механизм Eligible Leader Replicas (KIP-966), который безопаснее выбирает лидера при сжатии ISR. Проверь по документации своей версии, включён ли он и как настроен.
+В Kafka 4.x появился механизм Eligible Leader Replicas (KIP-966), который безопаснее выбирает лидера при сжатии ISR. С 4.1 он включён по умолчанию на новых кластерах; на обновлённых его включают через feature `eligible.leader.replicas.version`. После включения `min.insync.replicas`, заданный на уровне отдельного брокера, удаляется: задавай его на уровне кластера.
 
 ## 8.4 Предпочтительный лидер и балансировка
 
@@ -2796,7 +2807,7 @@ kt kafka-producer-perf-test.sh --topic perf --num-records 1000000 --record-size 
 
 # чтение
 kt kafka-consumer-perf-test.sh --bootstrap-server kafka-1:19092 --topic perf \
-  --messages 1000000 --group perf-test
+  --num-records 1000000 --group perf-test
 
 # задержка end-to-end
 kt kafka-e2e-latency.sh --help
@@ -2909,7 +2920,7 @@ Kafka отдаёт метрики через **JMX**. Стандартный п�
 
 ## 16.3 Consumer lag
 
-Lag = `log end offset − committed offset` для каждой партиции группы.
+Lag = `high watermark − committed offset` для каждой партиции группы (у консьюмера с `read_committed` — `LSO − committed offset`). Колонка `LOG-END-OFFSET` в выводе `kafka-consumer-groups.sh` на деле показывает high watermark, а не LEO лидера.
 
 ```bash
 kt kafka-consumer-groups.sh --bootstrap-server kafka-1:19092 --describe --group billing
@@ -3228,7 +3239,7 @@ kafka-features.sh --bootstrap-server kafka-1:19092 upgrade --release-version 4.3
 | Автосоздание топиков | Топики с дефолтными настройками и одной партицией от опечатки | Явное создание через IaC |
 | Ключ с малым числом значений (`country`, `tenant`) | Горячие партиции | Ключ с высокой кардинальностью |
 | Тысячи топиков «на клиента» | Нагрузка на метаданные и контроллер | Общий топик с ключом клиента |
-| Автокоммит при сложной обработке | Потери при падении | Ручной коммит после обработки |
+| Автокоммит при асинхронной обработке (пул потоков, передача в очередь) | Потери при падении: коммит обгоняет обработку | Ручной коммит после обработки |
 | Коммит до обработки | At-most-once | Коммит после успешной обработки |
 | Большие сообщения (десятки МБ) | Давление на память и репликацию | Объектное хранилище + ссылка в событии |
 | Kafka как база с запросами | Kafka не умеет искать по полям | Материализуй в базу или state store |
@@ -3379,7 +3390,7 @@ kafka-configs.sh --bootstrap-server $B --alter --entity-type users --entity-name
 
 # производительность
 kafka-producer-perf-test.sh --topic t --num-records 1000000 --record-size 1024 --throughput -1 --producer-props bootstrap.servers=$B acks=all
-kafka-consumer-perf-test.sh --bootstrap-server $B --topic t --messages 1000000
+kafka-consumer-perf-test.sh --bootstrap-server $B --topic t --num-records 1000000
 
 # Kafka Streams
 kafka-streams-application-reset.sh --bootstrap-server $B --application-id my-app --input-topics t
@@ -3472,7 +3483,7 @@ heap: 4–8 ГБ, остальная память — page cache
 14. **Что такое high watermark?** Последний offset, записанный во все ISR. Консьюмеры не видят записи дальше него.
 15. **От чего защищает идемпотентный producer?** От дублей при сетевых повторах отправки в рамках одной сессии producer'а, по producer id и номерам последовательности.
 16. **Что такое committed offset и когда его коммитить?** Номер следующего сообщения для чтения группой. Коммитить после обработки — это at-least-once.
-17. **Чем опасен автокоммит?** Offset может закоммититься до завершения обработки, и при падении сообщения потеряются.
+17. **Чем опасен автокоммит?** Java-консьюмер коммитит в `poll()` только offsets, выданные предыдущим `poll()`, поэтому при синхронной обработке в цикле это at-least-once (с повторами после падения). Опасен он при асинхронной обработке или передаче записей в другой поток: offset закоммитится до завершения обработки, и при падении сообщения потеряются.
 18. **Когда срабатывает auto.offset.reset?** Только если у группы нет закоммиченного offset (новая группа или offset удалён). Для перечитывания существующей группы нужен сброс offsets.
 19. **Что такое ребалансировка и почему она вредна?** Перераспределение партиций при изменении состава группы. В старом eager-режиме останавливала всю группу; cooperative и новый протокол KIP-848 делают её инкрементальной.
 20. **Что даёт static membership?** `group.instance.id` позволяет перезапустить консьюмер в пределах session timeout без ребалансировки.
@@ -3608,4 +3619,4 @@ Kafka — когда поток событий нужен нескольким �
 
 ⭐ Если курс помог, поставь звезду: так его найдут другие разработчики.
 
-**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.
+**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](../LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.

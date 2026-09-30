@@ -9,6 +9,17 @@ import pytest
 from conftest import AWS_ENDPOINT, require, unique
 
 pytestmark = pytest.mark.aws
+_cleanups = []   # functions that delete what a test created, run after each test
+
+
+@pytest.fixture(autouse=True)
+def cleanup():
+    yield
+    while _cleanups:
+        try:
+            _cleanups.pop()()
+        except Exception:   # best effort: the emulator may already be gone
+            pass
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +37,7 @@ def sqs(session):
 
 def make_queue(sqs, name, **attrs):
     url = sqs.create_queue(QueueName=name, Attributes={k: str(v) for k, v in attrs.items()})["QueueUrl"]
+    _cleanups.append(lambda: sqs.delete_queue(QueueUrl=url))
     arn = sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["QueueArn"])["Attributes"]["QueueArn"]
     return url, arn
 
@@ -33,6 +45,12 @@ def make_queue(sqs, name, **attrs):
 def receive(sqs, url, wait=1, **kw):
     return sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10, WaitTimeSeconds=wait,
                                MessageSystemAttributeNames=["ApproximateReceiveCount"], **kw).get("Messages", [])
+
+
+def receive_one(sqs, url, wait=1):
+    msgs = receive(sqs, url, wait)
+    assert len(msgs) == 1, f"got {len(msgs)} messages, want 1"
+    return msgs[0]
 
 
 # 3.1: a received message is invisible until the visibility timeout expires, then it comes back
@@ -56,7 +74,7 @@ def test_visibility_timeout_redelivers(sqs):
 def test_change_visibility_zero_returns_now(sqs):
     url, _ = make_queue(sqs, unique("chg"), VisibilityTimeout=60)
     sqs.send_message(QueueUrl=url, MessageBody="job")
-    m = receive(sqs, url)[0]
+    m = receive_one(sqs, url)
     sqs.change_message_visibility(QueueUrl=url, ReceiptHandle=m["ReceiptHandle"], VisibilityTimeout=0)
     assert len(receive(sqs, url)) == 1
 
@@ -106,7 +124,7 @@ def test_fifo_dedup_and_order(sqs):
 def test_batch_partial_failure(sqs):
     url, _ = make_queue(sqs, unique("batch"))
     sqs.send_message(QueueUrl=url, MessageBody="job")
-    m = receive(sqs, url)[0]
+    m = receive_one(sqs, url)
     resp = sqs.delete_message_batch(QueueUrl=url, Entries=[
         {"Id": "good", "ReceiptHandle": m["ReceiptHandle"]},
         {"Id": "bad", "ReceiptHandle": "not-a-valid-receipt-handle"},
@@ -119,6 +137,7 @@ def test_batch_partial_failure(sqs):
 def test_sns_fanout_raw_and_filter(session, sqs):
     sns = session.client("sns", endpoint_url=AWS_ENDPOINT)
     topic = sns.create_topic(Name=unique("orders"))["TopicArn"]
+    _cleanups.append(lambda: sns.delete_topic(TopicArn=topic))   # also deletes its subscriptions
     all_url, all_arn = make_queue(sqs, unique("audit"))
     created_url, created_arn = make_queue(sqs, unique("billing"))
     sns.subscribe(TopicArn=topic, Protocol="sqs", Endpoint=all_arn,
@@ -134,7 +153,7 @@ def test_sns_fanout_raw_and_filter(session, sqs):
     audit = receive(sqs, all_url, wait=2)
     billing = receive(sqs, created_url, wait=2)
     assert len(audit) == 2, "the unfiltered subscription gets every message"
-    assert [json.loads(m["Body"])["event"] for m in billing] == ["OrderCreated"]
+    assert [json.loads(m["Body"])["event"] for m in billing] == ["OrderCreated"], billing
     assert "Type" not in json.loads(billing[0]["Body"]), "raw delivery must not wrap the body"
 
 
@@ -143,12 +162,15 @@ def test_eventbridge_rule_numeric_match(session, sqs):
     events = session.client("events", endpoint_url=AWS_ENDPOINT)
     bus = unique("shop")
     events.create_event_bus(Name=bus)
+    _cleanups.append(lambda: events.delete_event_bus(Name=bus))
     url, arn = make_queue(sqs, unique("fraud"))
     rule = unique("big-orders")
     events.put_rule(Name=rule, EventBusName=bus, EventPattern=json.dumps({
         "source": ["shop.orders"], "detail-type": ["OrderCreated"],
         "detail": {"amount": [{"numeric": [">", 10000]}]}}))
+    _cleanups.append(lambda: events.delete_rule(Name=rule, EventBusName=bus))
     events.put_targets(Rule=rule, EventBusName=bus, Targets=[{"Id": "fraud", "Arn": arn}])
+    _cleanups.append(lambda: events.remove_targets(Rule=rule, EventBusName=bus, Ids=["fraud"]))
 
     resp = events.put_events(Entries=[
         {"Source": "shop.orders", "DetailType": "OrderCreated", "EventBusName": bus,
@@ -156,6 +178,6 @@ def test_eventbridge_rule_numeric_match(session, sqs):
         {"Source": "shop.orders", "DetailType": "OrderCreated", "EventBusName": bus,
          "Detail": json.dumps({"order_id": "small", "amount": 500})},
     ])
-    assert resp["FailedEntryCount"] == 0
+    assert resp["FailedEntryCount"] == 0, resp["Entries"]
     got = receive(sqs, url, wait=2)
     assert [json.loads(m["Body"])["detail"]["order_id"] for m in got] == ["big"]

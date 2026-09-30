@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"testing"
 	"time"
 )
 
@@ -44,4 +45,14 @@ func Reachable(addr string) bool {
 	}
 	_ = c.Close()
 	return true
+}
+
+// Unavailable skips the test when an emulator is down, or fails it if
+// COURSE_REQUIRE_BROKER=1 (set in CI, so a broken emulator can't hide behind skips).
+func Unavailable(t testing.TB, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("COURSE_REQUIRE_BROKER") == "1" {
+		t.Fatalf(format+" (COURSE_REQUIRE_BROKER=1)", args...)
+	}
+	t.Skipf(format, args...)
 }

@@ -24,7 +24,7 @@ import (
 func awsConfig(t *testing.T) aws.Config {
 	t.Helper()
 	if !emu.Reachable(emu.AWSEndpoint()) {
-		t.Skipf("AWS emulator is not running on %s", emu.AWSEndpoint())
+		emu.Unavailable(t, "AWS emulator is not running on %s", emu.AWSEndpoint())
 	}
 	t.Setenv("AWS_ACCESS_KEY_ID", emu.Env("AWS_ACCESS_KEY_ID", "test"))
 	t.Setenv("AWS_SECRET_ACCESS_KEY", emu.Env("AWS_SECRET_ACCESS_KEY", "test"))
@@ -65,6 +65,16 @@ func receive(t *testing.T, c *sqs.Client, url string, wait int32) []types.Messag
 		t.Fatal(err)
 	}
 	return out.Messages
+}
+
+// receiveOne fails the test instead of panicking when nothing arrives.
+func receiveOne(t *testing.T, c *sqs.Client, url string, wait int32) types.Message {
+	t.Helper()
+	msgs := receive(t, c, url, wait)
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	return msgs[0]
 }
 
 // 3.1: a received message is invisible until the visibility timeout expires, then comes back.
@@ -152,7 +162,7 @@ func TestSQSBatchPartialFailure(t *testing.T) {
 	c := sqsClient(t)
 	url, _ := makeQueue(t, c, unique("go-batch"), nil)
 	send(t, c, url, "job")
-	m := receive(t, c, url, 1)[0]
+	m := receiveOne(t, c, url, 1)
 	out, err := c.DeleteMessageBatch(context.Background(), &sqs.DeleteMessageBatchInput{
 		QueueUrl: aws.String(url),
 		Entries: []types.DeleteMessageBatchRequestEntry{
@@ -178,6 +188,8 @@ func TestSNSFanoutRawAndFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// deleting a topic also deletes its subscriptions
+	t.Cleanup(func() { _, _ = s.DeleteTopic(context.Background(), &sns.DeleteTopicInput{TopicArn: topic.TopicArn}) })
 	auditURL, auditARN := makeQueue(t, c, unique("go-audit"), nil)
 	billingURL, billingARN := makeQueue(t, c, unique("go-billing"), nil)
 	filter, _ := json.Marshal(map[string][]string{"event_type": {"OrderCreated"}})
@@ -220,21 +232,35 @@ func TestEventBridgeNumericRule(t *testing.T) {
 	if _, err := eb.CreateEventBus(ctx, &eventbridge.CreateEventBusInput{Name: aws.String(bus)}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = eb.DeleteEventBus(context.Background(), &eventbridge.DeleteEventBusInput{Name: aws.String(bus)})
+	})
 	url, arn := makeQueue(t, c, unique("go-fraud"), nil)
 	pattern := `{"source":["shop.orders"],"detail":{"amount":[{"numeric":[">",10000]}]}}`
 	if _, err := eb.PutRule(ctx, &eventbridge.PutRuleInput{Name: aws.String(rule), EventBusName: aws.String(bus), EventPattern: aws.String(pattern)}); err != nil {
 		t.Fatal(err)
 	}
+	// cleanups run in reverse order: targets, then the rule, then the bus
+	t.Cleanup(func() {
+		_, _ = eb.DeleteRule(context.Background(), &eventbridge.DeleteRuleInput{Name: aws.String(rule), EventBusName: aws.String(bus)})
+	})
 	if _, err := eb.PutTargets(ctx, &eventbridge.PutTargetsInput{Rule: aws.String(rule), EventBusName: aws.String(bus),
 		Targets: []ebtypes.Target{{Id: aws.String("fraud"), Arn: aws.String(arn)}}}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = eb.RemoveTargets(context.Background(), &eventbridge.RemoveTargetsInput{
+			Rule: aws.String(rule), EventBusName: aws.String(bus), Ids: []string{"fraud"}})
+	})
 	out, err := eb.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: []ebtypes.PutEventsRequestEntry{
 		{Source: aws.String("shop.orders"), DetailType: aws.String("OrderCreated"), EventBusName: aws.String(bus), Detail: aws.String(`{"order_id":"big","amount":14990}`)},
 		{Source: aws.String("shop.orders"), DetailType: aws.String("OrderCreated"), EventBusName: aws.String(bus), Detail: aws.String(`{"order_id":"small","amount":500}`)},
 	}})
-	if err != nil || out.FailedEntryCount != 0 {
-		t.Fatalf("put events: %v, failed %d", err, out.FailedEntryCount)
+	if err != nil {
+		t.Fatalf("put events: %v", err)
+	}
+	if out.FailedEntryCount != 0 {
+		t.Fatalf("put events: %d entries failed: %+v", out.FailedEntryCount, out.Entries)
 	}
 	got := receive(t, c, url, 2)
 	if len(got) != 1 {
@@ -245,7 +271,9 @@ func TestEventBridgeNumericRule(t *testing.T) {
 			OrderID string `json:"order_id"`
 		} `json:"detail"`
 	}
-	_ = json.Unmarshal([]byte(aws.ToString(got[0].Body)), &ev)
+	if err := json.Unmarshal([]byte(aws.ToString(got[0].Body)), &ev); err != nil {
+		t.Fatalf("event body: %v", err)
+	}
 	if ev.Detail.OrderID != "big" {
 		t.Fatalf("routed %q, want big", ev.Detail.OrderID)
 	}

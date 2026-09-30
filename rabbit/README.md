@@ -98,9 +98,9 @@
 - since 4.0 **classic mirrored queues are gone**: replicated queues are quorum queues and streams;
 - since 4.3 cluster metadata is stored only in **Khepri** (Raft-based); Mnesia and partition handling strategies are removed;
 - since 4.3 non-durable non-exclusive queues and `global` prefetch are **denied by default**;
-- the minimum Erlang version for 4.3 is 27.
+- the minimum Erlang version is 27 starting with 4.3.3 (and 4.2.9); 4.3.0–4.3.2 still ran on Erlang 26.2.
 
-**Runnable examples:** the cluster, a smoke test of the commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). CI runs them every week against 4.3 and the newest RabbitMQ image, so if a release changes behaviour described here, the build goes red.
+**Runnable examples:** the cluster, a smoke test of the commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). CI ([`.github/workflows/examples.yml`](../.github/workflows/examples.yml)) runs them on every push and once a week: `go vet` and unit tests, then the smoke test and the integration tests on a three-node cluster, on the `rabbitmq:4.3-management` image and on the newest RabbitMQ image. If a release changes behaviour described here, the build goes red.
 
 ---
 
@@ -496,8 +496,19 @@ cluster_formation.classic_config.nodes.1 = rabbit@rabbit-1
 cluster_formation.classic_config.nodes.2 = rabbit@rabbit-2
 cluster_formation.classic_config.nodes.3 = rabbit@rabbit-3
 
-# Prometheus metrics on port 15692
+# Prometheus (port 15692): /metrics serves aggregated metrics, which is the default;
+# per-queue metrics are on /metrics/per-object and /metrics/detailed (module 16.1)
 prometheus.return_per_object_metrics = false
+
+# stream protocol (module 10.4): advertise localhost to clients, not the container name
+stream.advertised_host = localhost
+```
+
+Each node publishes the stream port on its own host port (5552, 5553, 5554), and must advertise exactly that port to clients:
+
+```bash
+mkdir stream
+for i in 1 2 3; do echo "stream.advertised_port = $((5551 + i))" > stream/rabbit-$i.conf; done
 ```
 
 `enabled_plugins`:
@@ -535,26 +546,29 @@ services:
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-1.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit1-data:/var/lib/rabbitmq
 
   rabbit-2:
     <<: *rabbit-common
     hostname: rabbit-2
     container_name: rabbit-2
-    ports: ["5673:5672", "15673:15672"]
+    ports: ["5673:5672", "15673:15672", "5553:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-2.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit2-data:/var/lib/rabbitmq
 
   rabbit-3:
     <<: *rabbit-common
     hostname: rabbit-3
     container_name: rabbit-3
-    ports: ["5674:5672", "15674:15672"]
+    ports: ["5674:5672", "15674:15672", "5554:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-3.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit3-data:/var/lib/rabbitmq
 
 volumes:
@@ -582,7 +596,7 @@ docker exec rabbit-1 rabbitmqctl list_feature_flags name state
 
 In `cluster_status` you'll see three nodes under *Disk Nodes* and all three under *Running Nodes*. If a node didn't join, check its logs: `docker logs rabbit-2`.
 
-The management UI is available on every node: http://localhost:15672, http://localhost:15673, http://localhost:15674.
+The management UI is available on every node: http://localhost:15672, http://localhost:15673, http://localhost:15674. The stream protocol is on `localhost:5552`, `5553` and `5554`.
 
 ## 2.4 The first queue and the first message
 
@@ -778,7 +792,7 @@ Rules:
 - words from general to specific: `order.created`, not `created.order`;
 - one entity, one prefix: `order.#` catches the whole lifecycle;
 - don't put identifiers in the key: you don't need millions of unique keys, routing works on patterns;
-- use `#` at the end of a pattern; in 4.3 a binding key may contain at most two `#`.
+- use `#` at the end of a pattern; since 4.3.5 a binding key may contain at most two `#`.
 
 ## 3.4 An online shop topology, by example
 
@@ -906,7 +920,7 @@ For your own systems create your own exchanges with clear names: built-in ones c
 
 ## 4.2 Classic queues
 
-A classic queue stores messages on one node: in memory, with paging to disk (since 4.2 only the second storage version, CQv2, is used; in 4.3 the first was removed together with the `x-queue-mode` argument).
+A classic queue stores messages on one node: in memory, with paging to disk (since 4.0 only the second storage version, CQv2, is used: the first, CQv1, was removed except for the migration code; `x-queue-mode=lazy` has done nothing since 3.12, and since 4.3 declaring a queue with `x-queue-mode` or `x-queue-version=1` fails).
 
 What to know:
 
@@ -937,9 +951,9 @@ Useful built-in features:
 | Feature | What it gives you |
 |---|---|
 | `delivery-limit` | After N failed deliveries the message goes to the DLX or is dropped. Since 4.0 the default is **20**: protection against an endless loop of "poison" messages |
-| `x-delivery-count` header | How many times the message has been delivered |
+| `x-delivery-count` header | How many deliveries failed (`reject`, a lost connection). Since 4.3 `nack` doesn't increment it; `x-acquired-count` counts every hand-out to a consumer |
 | At-least-once dead lettering | Reliable forwarding to the DLX without losses (module 8) |
-| Priorities | Since 4.3, strict priorities with correct redelivery ordering |
+| Priorities | Since 4.3, strict, 32 levels (0–31), with correct redelivery ordering; 4.0–4.2 had only two levels: normal (0–4) and high (5+) |
 | Delayed retry (4.3) | A returned message waits before redelivery, the delay grows with the number of attempts (module 8) |
 | Consumer timeout (4.3) | Messages a consumer holds without ack for too long return to the queue |
 
@@ -1086,7 +1100,7 @@ When the broker sends the `ack`:
 | Classic durable + persistent | The message is written to disk (or delivered and acked by a consumer) |
 | No matching queue | Immediately (preceded by `basic.return` if `mandatory=true`) |
 
-A `nack` arrives if the broker couldn't accept the message: for example, a queue with `x-overflow=reject-publish` is full or the quorum queue's replicas are unavailable.
+A `nack` arrives if the broker couldn't accept the message: for example, a queue with `x-overflow=reject-publish` is full. If a quorum queue has lost its quorum of replicas, usually neither an `ack` nor a `nack` arrives: the confirm waits for a leader to be elected (sometimes the broker answers with a `nack`). So always put a timeout on waiting for a confirm.
 
 **The main rule:** consider a message sent only after the `ack`. If a `nack` arrived or waiting timed out, resend (with the same `message_id`) or save the message to an outbox (module 7).
 
@@ -1208,7 +1222,7 @@ func main() {
 }
 ```
 
-For high throughput, publish a batch of messages collecting `DeferredConfirmation`s, then wait for all of them. Returns arrive asynchronously and before the ack, so in production they are read in a separate goroutine.
+For high throughput, publish a batch of messages collecting `DeferredConfirmation`s, then wait for all of them. Returns arrive asynchronously and before the ack, so in production they are read in a separate goroutine. An example with a batch and re-sending unconfirmed messages after a dropped connection is in [`examples/go/cmd/publisher`](examples/go/cmd/publisher/main.go).
 
 ## 5.7 Publisher in Java
 
@@ -1343,13 +1357,13 @@ You almost always want **manual ack**. Auto ack is acceptable for data you can a
 | Reply | Effect | When |
 |---|---|---|
 | `basic.ack` | Processed, delete it | Success |
-| `basic.nack(requeue=true)` | Return it to the queue | A transient error, but carefully, see below |
+| `basic.reject(requeue=true)` / `basic.nack(requeue=true)` | Return it to the queue | A transient error, but carefully, see below |
 | `basic.nack(requeue=false)` / `basic.reject(requeue=false)` | Drop it or send it to the DLX | The message is invalid |
 | nothing, the consumer crashed | All its unacked messages return to the queue | |
 
 The `multiple=true` flag acknowledges every message up to the given `delivery_tag` at once: handy for batches.
 
-**The `requeue=true` trap:** the message returns **to the head of the queue** and is delivered again immediately. A "poison" message that always fails becomes an endless CPU-eating loop. In quorum queues `delivery-limit` protects you (20 by default): after the limit the message goes to the DLX or is dropped. Proper delayed retries are in module 8.
+**The `requeue=true` trap:** the message returns **to the head of the queue** and is delivered again immediately. A "poison" message that always fails becomes an endless CPU-eating loop. In quorum queues `delivery-limit` protects you (20 by default): after the limit the message goes to the DLX or is dropped. But since 4.3 the limit counts only **failed** deliveries: `basic.reject(requeue=true)` and a lost connection increment `x-delivery-count`, while `basic.nack(requeue=true)` doesn't, so such a loop can spin forever. So handle a transient error with `reject(requeue=true)`. Proper delayed retries are in module 8.
 
 **Important:** a `delivery_tag` is unique **within a channel**. A message must be acknowledged on the same channel it was received on. If the channel closed, acking by the old tag is impossible, and the message will be delivered again.
 
@@ -1395,7 +1409,7 @@ def on_message(ch, method, props, body):
     except json.JSONDecodeError:
         ch.basic_reject(method.delivery_tag, requeue=False)   # garbage: to the DLX
     except TemporaryError:
-        ch.basic_nack(method.delivery_tag, requeue=True)      # try again (delivery-limit protects us)
+        ch.basic_reject(method.delivery_tag, requeue=True)    # try again (reject counts toward delivery-limit)
 
 ch.basic_consume("payments", on_message)
 try:
@@ -1435,7 +1449,7 @@ for d := range msgs { // closes when the connection or AMQP channel closes
 	count, _ := d.Headers["x-delivery-count"].(int64)
 	if err := process(d.Body); err != nil {
 		if isTemporary(err) {
-			d.Nack(false, true) // requeue
+			d.Reject(true) // requeue; unlike Nack, it counts toward delivery-limit
 		} else {
 			d.Reject(false) // to the DLX
 		}
@@ -1447,7 +1461,7 @@ for d := range msgs { // closes when the connection or AMQP channel closes
 log.Println("delivery channel closed: reconnect needed")
 ```
 
-`amqp091-go` **does not reconnect by itself**. When the connection drops, the `msgs` channel closes; the application must subscribe to `conn.NotifyClose` and reopen the connection, channel and subscription.
+By default `amqp091-go` **does not reconnect by itself**. When the connection drops, the `msgs` channel closes; the application must subscribe to `conn.NotifyClose` and `ch.NotifyCancel` (the broker cancels the subscription if the queue is deleted or its node goes away), wait with an exponentially growing pause, then reopen the connection and channel, declare the topology and subscribe again. A complete example with such a loop and a clean SIGTERM shutdown (`ch.Cancel`, finish and ack the deliveries already received, close the channel) is in [`examples/go/cmd/consumer`](examples/go/cmd/consumer/main.go). Since v1.12 the library also has built-in recovery that you enable explicitly: `amqp.DialConfig(url, amqp.Config{Recovery: &amqp.Recovery{}})`. It restores the connection, channels, topology and subscriptions, but publisher confirms still outstanding when the connection dropped complete as not acked: those messages still have to be re-sent.
 
 ## 6.7 Consumer in Java
 
@@ -1470,7 +1484,7 @@ ch.basicConsume("payments", false, "billing-1", new DefaultConsumer(ch) {
         } catch (InvalidMessageException e) {
             getChannel().basicReject(deliveryTag, false);     // to the DLX
         } catch (Exception e) {
-            getChannel().basicNack(deliveryTag, false, true); // requeue
+            getChannel().basicReject(deliveryTag, true);      // requeue (counts toward delivery-limit)
         }
     }
 });
@@ -1505,7 +1519,7 @@ Unlike Kafka, the number of consumers on a queue is **not bounded by a partition
 ### Self-check questions
 
 1. Why is auto ack at-most-once?
-2. Why is `nack(requeue=true)` dangerous for a "poison" message, and what protects against it in quorum queues?
+2. Why is `requeue=true` dangerous for a "poison" message, what protects against it in quorum queues, and why does it matter in 4.3 whether it's `reject` or `nack`?
 3. How do you choose prefetch for slow and for fast processing?
 4. How do you preserve processing order with several consumers?
 5. Why can't a `delivery_tag` be acknowledged on another channel?
@@ -1673,7 +1687,7 @@ curl -s $AUTH -X PUT $API/exchanges/%2F/shop.dlx -d '{"type":"topic","durable":t
 curl -s $AUTH -X PUT $API/queues/%2F/shop.dead -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
 curl -s $AUTH -X POST $API/bindings/%2F/e/shop.dlx/q/shop.dead -d '{"routing_key":"#"}'
 
-# policy: these queues dead-letter into shop.dlx
+# policy: the payments, stock and notifications queues dead-letter into shop.dlx
 docker exec rabbit-1 rabbitmqctl set_policy shop-dlx '^(payments|stock|notifications)$' \
   '{"dead-letter-exchange":"shop.dlx","delivery-limit":5}' --apply-to queues
 ```
@@ -1713,10 +1727,10 @@ In `at-least-once` mode the quorum queue keeps the message until the DLX queue c
 | Where | How | Quirk |
 |---|---|---|
 | TTL for a queue's messages | `x-message-ttl` or the `message-ttl` policy | Every message in the queue lives at most N ms |
-| TTL of a single message | the `expiration` property (a string, ms) | **In classic queues it expires only at the head of the queue** |
+| TTL of a single message | the `expiration` property (a string, ms) | **Expires only once it reaches the head of the queue** |
 | Queue TTL | `x-expires` or the `expires` policy | Delete an unused queue |
 
-**The per-message TTL trap.** A classic queue checks expiry only for the message at the head. If a message with a one-hour TTL is in front of one with a one-second TTL, the second waits an hour. So for delay queues use **a queue TTL**, not a per-message one.
+**The per-message TTL trap.** A queue (classic and quorum alike) checks expiry only for the message at the head. If a message with a one-hour TTL is in front of one with a one-second TTL, the second waits an hour. So for delay queues use **a queue TTL**, not a per-message one.
 
 ## 8.6 Delayed retries with TTL + DLX
 
@@ -1781,19 +1795,19 @@ docker exec rabbit-1 rabbitmqctl set_policy payments-retry '^payments$' \
     "delivery-limit":10,"dead-letter-exchange":"shop.dlx"}' --apply-to queues
 ```
 
-- `delayed-retry-type`: `disabled`, `all`, `failed` or `returned`: which returns to delay;
+- `delayed-retry-type`: `disabled`, `all`, `failed` or `returned`: which returns to delay: `failed` means those with an incremented `delivery-count` (`reject`, a lost connection), `returned` those without (`nack`);
 - combined with `delivery-limit` and a DLX, it gives a complete "retries with growing delay, then DLQ" scheme with a single queue;
-- it works only once every node in the cluster runs 4.3; check the exact units and accepted values in the docs for your version.
+- delays are in milliseconds; the same can be set with the queue arguments `x-delayed-retry-type`, `x-delayed-retry-min`, `x-delayed-retry-max`; enable it once every node in the cluster runs 4.3.
 
 ## 8.8 The delayed message exchange plugin
 
-The third-party `rabbitmq_delayed_message_exchange` plugin adds the `x-delayed-message` exchange type: a message with an `x-delay` header is delivered after the given time. Handy for "send in an hour", but:
+The `rabbitmq_delayed_message_exchange` plugin added the `x-delayed-message` exchange type: a message with an `x-delay` header was delivered after the given time. **It doesn't work with 4.3**: the plugin kept delayed messages in Mnesia, which 4.3 removed, and the RabbitMQ team no longer maintains it (the last release targets 4.2). Even on older versions it had limitations:
 
 - delayed messages are stored **on one node and aren't replicated**;
 - it scales poorly to millions of delayed messages;
 - it's a separate plugin you have to install and upgrade yourself.
 
-For retries prefer delayed retry in quorum queues or TTL + DLX. For long delays (days) it's often simpler to keep the schedule in a database.
+For retries use delayed retry in quorum queues (8.7) or TTL + DLX (8.6). For long delays (days) it's often simpler to keep the schedule in a database.
 
 ## 8.9 Poison messages and a parking lot
 
@@ -1808,7 +1822,7 @@ A "poison" message fails every time it's processed. Protection:
 
 1. Set up a DLX for the `payments` queue, send a message and `reject(requeue=false)` it. Look at the `x-death` headers in `shop.dead`.
 2. Build a TTL + DLX retry with a 10-second delay and confirm the message doesn't return early.
-3. Send a message that always fails to a quorum queue with `delivery-limit=3` and `nack(requeue=true)`. How many times is it delivered, and where does it end up?
+3. Send a message that always fails to a quorum queue with `delivery-limit=3` and `reject(requeue=true)`. How many times is it delivered, and where does it end up? What changes if you do `nack(requeue=true)` instead of `reject`?
 
 ---
 
@@ -1895,7 +1909,7 @@ A new replica first catches up with the leader as a **non-voter** and only then 
 ## 9.7 How clients survive a node failure
 
 - Give the client **several node addresses** or a load balancer address (a TCP load balancer in front of the nodes).
-- The client must **reconnect** and re-declare channels and subscriptions. The Java client does it itself (`automatic recovery`), Go and Python don't: you have to implement it.
+- The client must **reconnect** and re-declare channels and subscriptions. The Java client does it itself (`automatic recovery`), `amqp091-go` only if you enable `Config.Recovery` (since v1.12), pika doesn't: you have to implement it (example: [`examples/go/cmd/consumer`](examples/go/cmd/consumer/main.go)).
 - After reconnecting, unacknowledged messages are delivered again: another reason for idempotency.
 - Publisher confirms not received before the disconnect are unknown: those messages must be resent.
 
@@ -1961,16 +1975,17 @@ As in Kafka, data is deleted **in whole segments**, so messages may live a littl
 Streams can be read by ordinary AMQP clients:
 
 ```python
+def on_message(ch, method, props, body):
+    offset = props.headers.get("x-stream-offset")   # the message's position in the stream
+    handle(body)
+    ch.basic_ack(method.delivery_tag)               # ack is needed for flow control; the message is not deleted
+
 ch.basic_qos(prefetch_count=500)                   # mandatory for streams
 ch.basic_consume(
     "shop.events.log", on_message,
     arguments={"x-stream-offset": "first"},        # first | last | next | <number> | <timestamp>
 )
-
-def on_message(ch, method, props, body):
-    offset = props.headers.get("x-stream-offset")   # the message's position in the stream
-    handle(body)
-    ch.basic_ack(method.delivery_tag)               # ack is needed for flow control; the message is not deleted
+ch.start_consuming()
 ```
 
 Over AMQP 0-9-1 the broker **doesn't store the reader's position**: on restart the consumer decides where to read from. Save the last processed offset (in the database next to the result) and subscribe with `x-stream-offset: <saved + 1>`.
@@ -1978,6 +1993,8 @@ Over AMQP 0-9-1 the broker **doesn't store the reader's position**: on restart t
 ## 10.4 The stream protocol
 
 For high throughput streams have a dedicated binary protocol (port **5552**, plugin `rabbitmq_stream`) and dedicated clients: Java, Go, .NET, Python, Rust.
+
+A stream client connects to any node, asks it for the addresses of the leader and replicas, and then connects to them directly. So a node must advertise an address the client can reach: by default that's its hostname (`rabbit-2`), which doesn't resolve on the developer's machine. The cluster from module 2.3 sets `stream.advertised_host = localhost` and a per-node `stream.advertised_port` (5552, 5553, 5554) for this. Clients inside the Docker network or Kubernetes don't need these settings: node names resolve there.
 
 What it offers beyond AMQP:
 
@@ -2090,6 +2107,7 @@ client                                              server
 The client:
 
 ```python
+import time
 import uuid
 import pika
 
@@ -2107,7 +2125,10 @@ corr_id = str(uuid.uuid4())
 ch.basic_publish("", "rpc.pricing", b'{"sku":"A1","qty":3}',
                  pika.BasicProperties(reply_to="amq.rabbitmq.reply-to", correlation_id=corr_id,
                                       expiration="5000"))   # the request is useless after 5 seconds
-conn.process_data_events(time_limit=5)                        # wait for the reply at most 5 seconds
+deadline = time.monotonic() + 5                               # wait for the reply at most 5 seconds
+while corr_id not in response and time.monotonic() < deadline:
+    # may return early after handling any event, so loop until the reply or the deadline
+    conn.process_data_events(time_limit=max(0, deadline - time.monotonic()))
 print(response.get(corr_id, "timeout"))
 ```
 
@@ -2149,7 +2170,7 @@ ch.basic_publish("", "reports", body, pika.BasicProperties(priority=5, delivery_
 
 - Messages with a higher `priority` are delivered first.
 - Priority works only when **there is a backlog**: if consumers take everything instantly, there's nothing to sort. A small prefetch strengthens the effect.
-- Quorum queues support priorities, and since 4.3 strict priorities with correct redelivery ordering.
+- Quorum queues support priorities without `x-max-priority`. Since 4.3 they are strict, 32 levels (0–31), and a message without `priority` counts as priority 4; 4.0–4.2 had only two levels: normal (0–4) and high (5 and above). Messages returned to the queue are redelivered in the order they were returned, regardless of priority.
 - Don't create dozens of levels: 2–5 is almost always enough.
 
 ## 11.5 Competing consumers and ordering
@@ -2328,7 +2349,7 @@ Typical uses of Shovel:
 - re-sending messages from a DLQ back to the work queue after a bug fix;
 - one-way delivery of data to another region or an isolated environment.
 
-Since 4.3.5 dynamic shovels have a `src-delete-after-duration` parameter: the shovel deletes itself after the given time, handy for one-off moves.
+Since 4.3.5 dynamic shovels have a `src-delete-after-duration` parameter: the shovel deletes itself after the given time (in seconds, at least 60 by default), handy for one-off moves.
 
 ## 13.4 Federation or Shovel
 
@@ -2397,7 +2418,7 @@ docker exec rabbit-1 rabbitmqctl set_user_limits billing '{"max-connections": 20
 
 Limits protect the cluster from one application leaking connections or creating queues endlessly, a typical cause of incidents.
 
-`rabbitmq.conf` also has node-wide limits: `max_connections` and `max_channels` (so named since 4.2.7/4.3.1; the old names `connection_max` and `channel_max` still work as aliases).
+`rabbitmq.conf` also has node-wide limits: `max_connections` (connections per node, unlimited by default) and `channel_max_per_node` (channels per node). Don't confuse them with `max_channels_per_connection`: that's the maximum number of channels in one connection, negotiated with the client when it connects (2047 by default). The keys `max_connections` and `max_channels_per_connection` have these names since 4.2.7/4.3.1; the old names `connection_max` and `channel_max` still work as aliases.
 
 ## 14.3 The memory alarm
 
@@ -2590,6 +2611,8 @@ The management UI is convenient for investigating a situation but doesn't replac
 | `rabbitmq_global_messages_redelivered_total` | Redeliveries |
 | `rabbitmq_global_messages_confirmed_total` | Confirmed publishes |
 
+With `prometheus.return_per_object_metrics = false` (the default, as in the course cluster) the `rabbitmq_queue_*` metrics on `/metrics` are **per-node sums with no `queue` label**. For per-queue graphs and alerts scrape `/metrics/detailed?family=queue_coarse_metrics&family=queue_consumer_count`: there the same per-queue values are called `rabbitmq_detailed_queue_messages_ready`, `rabbitmq_detailed_queue_messages_unacked`, `rabbitmq_detailed_queue_messages` and `rabbitmq_detailed_queue_consumers`. `/metrics/per-object` also has the `queue` label, but it gets expensive with thousands of queues.
+
 ## 16.3 Health checks
 
 ```bash
@@ -2618,6 +2641,36 @@ For Kubernetes: liveness is `rabbitmq-diagnostics ping` (the node is alive), rea
 | **Connection or channel growth** | Sharp | A connection leak in an application |
 | **Free space** | < 20% | A disk alarm is coming |
 | **Authentication errors** | Growing | An attack or a broken deployment |
+
+Per-queue alerts are built on metrics from `/metrics/detailed` (see 16.2), alarms and node counters on the plain `/metrics`. This is how it looks in Prometheus for the cluster configuration from module 2.3:
+
+```yaml
+# prometheus.yml: aggregated node metrics + per-queue metrics
+scrape_configs:
+  - job_name: rabbitmq
+    static_configs: [{targets: ["rabbit-1:15692", "rabbit-2:15692", "rabbit-3:15692"]}]
+  - job_name: rabbitmq-queues
+    metrics_path: /metrics/detailed
+    params: {family: [queue_coarse_metrics, queue_consumer_count]}
+    static_configs: [{targets: ["rabbit-1:15692", "rabbit-2:15692", "rabbit-3:15692"]}]
+
+# rules.yml
+groups:
+  - name: rabbitmq
+    rules:
+      - alert: RabbitMQAlarm             # memory or disk alarm
+        expr: max(rabbitmq_alarms_memory_used_watermark) == 1 or max(rabbitmq_alarms_free_disk_space_watermark) == 1
+      - alert: QueueWithoutConsumers     # a queue without consumers
+        expr: rabbitmq_detailed_queue_consumers == 0 and on(vhost, queue) rabbitmq_detailed_queue_messages_ready > 0
+        for: 5m
+      - alert: QueueGrowing              # a queue growing for 10+ minutes
+        expr: deriv(rabbitmq_detailed_queue_messages_ready[10m]) > 0
+        for: 10m
+      - alert: MessagesInDLQ             # messages in a DLQ (shop.dead and the like)
+        expr: rabbitmq_detailed_queue_messages{queue=~".*\\.dead"} > 0
+      - alert: UnroutableDropped         # messages dropped without a route
+        expr: rate(rabbitmq_global_messages_unroutable_dropped_total[5m]) > 0
+```
 
 ## 16.5 Everyday commands
 
@@ -2852,7 +2905,7 @@ Rules from the release notes worth knowing:
 
 - **you can only upgrade to the next series**: to 4.3 only from the latest 4.2.x patch; to 4.2 from 4.1, 4.0 or 3.13;
 - **enable all feature flags before upgrading**: `rabbitmqctl enable_feature_flag all`, otherwise new nodes won't start in the cluster;
-- **Erlang**: 4.3 (and the latest 4.2 patches) need Erlang 27+. Official Docker images already contain a suitable Erlang;
+- **Erlang**: starting with 4.3.3 and 4.2.9, Erlang 27+ is required. Official Docker images already contain a suitable Erlang;
 - **mixed versions** in a cluster are acceptable only during a rolling upgrade: a few hours, not days.
 
 Rolling upgrade:
@@ -2905,7 +2958,7 @@ docker exec rabbit-1 rabbitmq-queues rebalance quorum
 | Auto ack for important data | Losses when a consumer crashes | Manual ack after processing |
 | Publishing without confirms | You don't know whether the message arrived | Publisher confirms |
 | Classic queues for important data | No replication | Quorum queues |
-| `nack(requeue=true)` on any error | An endless loop of "poison" messages | Delivery-limit, DLX, delayed retries |
+| `nack(requeue=true)` on any error | An endless loop of "poison" messages (in 4.3 `nack` doesn't count toward delivery-limit) | `reject(requeue=true)` + delivery-limit, DLX, delayed retries |
 | Prefetch without a limit | Consumer memory and uneven distribution | A sensible prefetch |
 | Queues with millions of messages | Memory, slow recovery | Short queues, limits, streams |
 | A queue per request or per user | Load on cluster metadata | Shared queues, direct reply-to |
@@ -3289,4 +3342,4 @@ Found an error, an inaccuracy or an outdated setting? Open an issue or send a pu
 
 ⭐ If this course helped, star the repo so other developers can find it.
 
-**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.
+**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](../LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.

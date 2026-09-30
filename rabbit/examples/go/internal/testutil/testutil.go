@@ -2,9 +2,13 @@
 package testutil
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,11 +26,22 @@ func Name(prefix string) string {
 	return prefix + "." + hex.EncodeToString(b)
 }
 
-// Dial opens a connection closed at test end.
+// RequireBrokerEnv makes an unreachable broker a test failure instead of a skip.
+// CI sets it to 1; locally the integration tests are skipped when no broker runs.
+const RequireBrokerEnv = "COURSE_REQUIRE_BROKER"
+
+// Dial opens a connection closed at test end. If the broker cannot be reached
+// over the network the test is skipped, unless COURSE_REQUIRE_BROKER=1: then it
+// fails. Other errors (wrong credentials, vhost) always fail the test.
 func Dial(t *testing.T) *amqp.Connection {
 	t.Helper()
 	c, err := amqp.Dial(conn.URL())
 	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && os.Getenv(RequireBrokerEnv) != "1" {
+			t.Skipf("RabbitMQ is not reachable at %s: %v (start examples/cluster; set %s=1 to fail instead)",
+				conn.URL(), err, RequireBrokerEnv)
+		}
 		t.Fatalf("dial %s: %v (is RabbitMQ running?)", conn.URL(), err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
@@ -112,20 +127,20 @@ func Publish(t *testing.T, ch *amqp.Channel, exchange, key string, body string, 
 	for _, f := range extra {
 		f(&p)
 	}
-	dc, err := ch.PublishWithDeferredConfirm(exchange, key, false, false, p)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	dc, err := ch.PublishWithDeferredConfirmWithContext(ctx, exchange, key, false, false, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dc == nil {
 		t.Fatal("channel is not in confirm mode")
 	}
-	select {
-	case <-dc.Done():
-		return dc.Acked()
-	case <-time.After(10 * time.Second):
-		t.Fatal("no confirm within 10s")
-		return false
+	acked, err := dc.WaitContext(ctx)
+	if err != nil {
+		t.Fatalf("no confirm within 10s: %v", err)
 	}
+	return acked
 }
 
 // ConfirmCh returns a channel in confirm mode.

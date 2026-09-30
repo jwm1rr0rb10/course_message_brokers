@@ -10,7 +10,7 @@
 
 **Clouds without the fluff:** every module gives you clear theory, diagrams, commands you can actually run (including without a cloud account, on emulators), the mistakes people make, and self-check questions.
 
-This course is part of a series. For a deeper look at the messaging models themselves, see the companion courses: **NATS**, **Apache Kafka** and **RabbitMQ**. This course links to them wherever a cloud service repeats their ideas.
+This course is part of a series. For a deeper look at the messaging models themselves, see the companion courses: **[NATS](../nats/README.md)**, **[Apache Kafka](../kafka/README.md)** and **[RabbitMQ](../rabbit/README.md)**. This course links to them wherever a cloud service repeats their ideas.
 
 ⭐ If the course helps, star the repository so other developers can find it.
 
@@ -92,7 +92,7 @@ This course is part of a series. For a deeper look at the messaging models thems
 
 **What to install:** Docker, Python 3.10+, Git. Cloud CLIs: `aws` (AWS CLI v2), `az` (Azure CLI), `gcloud` (Google Cloud CLI) — install the ones you need. Code examples are in Python (boto3, azure-servicebus, google-cloud-pubsub) and Go (aws-sdk-go-v2, azservicebus, cloud.google.com/go/pubsub/v2).
 
-**Runnable examples:** a docker-compose file with emulators for all three clouds, consumers and tests for the course's claims in Python and Go live in [`examples/`](examples/). CI runs them every week, so changes in emulators and SDKs show up immediately.
+**Runnable examples:** a docker-compose file with emulators for all three clouds, consumers and tests for the course's claims in Python and Go live in [`examples/`](examples/). CI ([`examples.yml`](../.github/workflows/examples.yml)) runs them on every push and weekly: `go vet` and the Go and Python tests against the emulators (moto, the Service Bus emulator, the Pub/Sub emulator), with both the pinned and the latest image versions, so changes in emulators and SDKs show up immediately.
 
 **Being current.** Cloud services change all the time and without version numbers: limits grow, new features appear. The course gives the values as of 2026; before designing, check the limits against the service's *Quotas* page. For example, SQS in August 2025 and EventBridge in January 2026 raised the maximum message size from 256 KiB to 1 MiB, SNS in September 2026 allowed up to 1 MiB via a separate topic attribute, and Google Pub/Sub Lite was shut down on 18 March 2026 — older articles don't know any of this.
 
@@ -154,7 +154,7 @@ The key point: **the cloud takes operations off your hands, but not design**. It
 | **The cloud's own services** | SQS, SNS, EventBridge, Kinesis; Service Bus, Event Grid, Event Hubs; Pub/Sub, Eventarc, Cloud Tasks | Their own API, exist only in that cloud |
 | **Managed open-source brokers** | Amazon MSK (Kafka), Amazon MQ (RabbitMQ, ActiveMQ); Google Managed Service for Apache Kafka; Event Hubs with the Kafka protocol | Standard Kafka and RabbitMQ clients, portability is preserved |
 
-Managed Kafka and RabbitMQ are covered in depth in the companion courses: everything said there about clients, guarantees and design applies to them. This course is about the clouds' **own** services.
+Managed Kafka and RabbitMQ are covered in depth in the companion courses ([Kafka](../kafka/README.md), [RabbitMQ](../rabbit/README.md)): everything said there about clients, guarantees and design applies to them. This course is about the clouds' **own** services.
 
 ## 0.6 The common model: HTTP API, pull and push
 
@@ -440,7 +440,7 @@ It's the same as `AckWait` in NATS JetStream or the consumer timeout in RabbitMQ
 | `MessageRetentionPeriod` | 4 days | 1 min – 14 days | How long an undeleted message is kept |
 | `ReceiveMessageWaitTimeSeconds` | 0 | 0 – 20 s | Default long polling for the queue |
 | `DelaySeconds` | 0 | 0 – 15 min | Delay before a message becomes visible |
-| `MaximumMessageSize` | 1 MiB | 1 B – 1 MiB | Maximum size |
+| `MaximumMessageSize` | 1 MiB | 1 KiB – 1 MiB | Maximum size |
 | `RedrivePolicy` | none | — | DLQ and `maxReceiveCount` |
 | `SqsManagedSseEnabled` | enabled | — | Server-side encryption |
 
@@ -845,7 +845,7 @@ awsl scheduler create-schedule --name remind-order-1 \
 
 ## 5.6 Kinesis Data Streams: a log in AWS
 
-When you need a **log** — per-key ordering, replay, many independent readers, large flows — AWS offers two paths: **Kinesis Data Streams** and **Amazon MSK** (managed Kafka, see the Kafka course).
+When you need a **log** — per-key ordering, replay, many independent readers, large flows — AWS offers two paths: **Kinesis Data Streams** and **Amazon MSK** (managed Kafka, see the [Kafka course](../kafka/README.md)).
 
 | Kinesis concept | Kafka analogue |
 |---|---|
@@ -1150,7 +1150,7 @@ A common pattern: Event Grid → Service Bus queue → workers. Event Grid is go
 
 - Partitions are set at creation; ordering is guaranteed within a partition (by partition key).
 - Retention ranges from an hour to 7 days on Standard, up to 90 days on Premium and Dedicated.
-- **Kafka endpoint** (Standard and above): ordinary Kafka clients connect to Event Hubs by changing only the address and authentication. Everything in the Kafka course about producers and consumer groups applies, but it isn't real Kafka: there's no access to brokers, part of the Kafka API and topic settings is supported with limitations, and the limits are its own. Check the list of supported features before migrating.
+- **Kafka endpoint** (Standard and above): ordinary Kafka clients connect to Event Hubs by changing only the address and authentication. Everything in the [Kafka course](../kafka/README.md) about producers and consumer groups applies, but it isn't real Kafka: there's no access to brokers, part of the Kafka API and topic settings is supported with limitations, and the limits are its own. Check the list of supported features before migrating.
 - **Capture** automatically exports the stream to Blob Storage or Data Lake in Avro/Parquet.
 - It has its own **Schema Registry**.
 
@@ -1223,7 +1223,7 @@ A received message must be acknowledged (`ack`) before the **ack deadline** expi
 - `nack`: return immediately (or with a delay according to the retry policy);
 - nothing: redelivery after the deadline expires.
 
-The subscription's **retry policy**: immediate, or exponential delay between `min-retry-delay` (from 10 s) and `max-retry-delay` (up to 600 s).
+The subscription's **retry policy**: immediate, or exponential delay between `min-retry-delay` and `max-retry-delay` (both 0–600 s; defaults 10 s and 600 s).
 
 ## 8.4 Publishing and receiving in Python
 
@@ -1335,7 +1335,7 @@ for event in ["OrderCreated", "OrderPaid", "OrderShipped"]:
 
 ## 8.7 Exactly-once delivery
 
-A pull subscription with `--enable-exactly-once-delivery` guarantees that a successfully acknowledged message **won't be redelivered** as long as its ack deadline hasn't expired:
+A pull subscription with `--enable-exactly-once-delivery` guarantees that a message isn't redelivered while it's outstanding (before its ack deadline expires), and a successfully acknowledged message **won't be redelivered** at all:
 
 ```python
 from google.cloud.pubsub_v1.subscriber import exceptions as sub_exceptions
@@ -1365,7 +1365,7 @@ gcloud pubsub subscriptions create billing-eu --topic orders \
   --message-filter='attributes.event_type = "OrderCreated" AND hasPrefix(attributes.region, "eu-")'
 ```
 
-Filtered-out messages are automatically acknowledged and aren't billed as deliveries.
+Pub/Sub acknowledges filtered-out messages automatically: you don't pay outbound (egress) fees for them, but message delivery fees still apply.
 
 **Retention and seek** give replay:
 
@@ -1441,7 +1441,7 @@ Typical uses: calls to an external API with a rate limit, delayed actions ("remi
 
 ## 9.3 Managed Service for Apache Kafka
 
-For a log in Google Cloud there's **Managed Service for Apache Kafka**: real Kafka managed by Google, with Kafka Connect support. Everything in the Kafka course applies directly. It's what Google suggested migrating to from the shut-down Pub/Sub Lite.
+For a log in Google Cloud there's **Managed Service for Apache Kafka**: real Kafka managed by Google, with Kafka Connect support. Everything in the [Kafka course](../kafka/README.md) applies directly. It's what Google suggested migrating to from the shut-down Pub/Sub Lite.
 
 Pub/Sub or Kafka in Google Cloud:
 
@@ -1531,7 +1531,7 @@ None of the services gives exactly-once **with an external database**. Everywher
 | | AWS | Azure | Google Cloud |
 |---|---|---|---|
 | Message delay | `DelaySeconds` up to 15 min | Scheduled messages (any time) | Not in Pub/Sub; Cloud Tasks `schedule_time` |
-| Retry with backoff | `ChangeMessageVisibility` with a growing delay | `abandon` + your own backoff or a scheduled resend | The subscription's retry policy (10–600 s) |
+| Retry with backoff | `ChangeMessageVisibility` with a growing delay | `abandon` + your own backoff or a scheduled resend | The subscription's retry policy (0–600 s) |
 | Schedules | EventBridge Scheduler | Scheduled messages, Logic Apps | Cloud Scheduler, Cloud Tasks |
 
 ## 10.7 Replay
@@ -1625,7 +1625,7 @@ An id assigned **by the broker** doesn't protect against a repeated **publish**:
 
 ## 11.3 Transactional outbox in the cloud
 
-The dual-write problem is the same as everywhere (see the Kafka and RabbitMQ courses): you can't atomically write to a database and publish an event. The solution is an outbox, and the clouds offer convenient ways to deliver it without your own poller:
+The dual-write problem is the same as everywhere (see the [Kafka](../kafka/README.md) and [RabbitMQ](../rabbit/README.md) courses): you can't atomically write to a database and publish an event. The solution is an outbox, and the clouds offer convenient ways to deliver it without your own poller:
 
 | Cloud | Database → change stream → broker |
 |---|---|
@@ -1832,7 +1832,7 @@ A consumer's IAM policy covers only its own queue:
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
-    "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"],
+    "Action": ["sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"],
     "Resource": "arn:aws:sqs:eu-central-1:123456789012:billing"
   }]
 }
@@ -2072,6 +2072,17 @@ resource "azurerm_servicebus_topic" "orders" {
   namespace_id = azurerm_servicebus_namespace.shop.id
 }
 
+# A subscription is created with the $Default rule (TrueFilter), and rules are OR'ed:
+# while $Default is there, billing gets every message. With this flag (azurerm 4.81+)
+# the provider deletes $Default right after creating the subscription.
+provider "azurerm" {
+  features {
+    servicebus {
+      auto_delete_subscription_default_rule = true
+    }
+  }
+}
+
 resource "azurerm_servicebus_subscription" "billing" {
   name               = "billing"
   topic_id           = azurerm_servicebus_topic.orders.id
@@ -2230,7 +2241,7 @@ Or without a rewrite: **Amazon MQ for RabbitMQ**.
 - **Low latency, edge, multi-cloud**: NATS.
 - **A mixed system** is normal: Pub/Sub for events in Google Cloud, Kafka for the analytics stream, internal NATS for RPC. The key is understanding the guarantees of every link.
 
-The companion courses cover Kafka, RabbitMQ and NATS in the same depth as this course covers cloud services.
+The companion courses cover [Kafka](../kafka/README.md), [RabbitMQ](../rabbit/README.md) and [NATS](../nats/README.md) in the same depth as this course covers cloud services.
 
 ---
 
@@ -2333,6 +2344,8 @@ az servicebus queue create -g shop-rg --namespace-name shop-bus -n tasks \
   --max-delivery-count 5 --lock-duration PT1M --enable-session false
 az servicebus topic create -g shop-rg --namespace-name shop-bus -n orders
 az servicebus topic subscription create -g shop-rg --namespace-name shop-bus --topic-name orders -n billing
+az servicebus topic subscription rule delete -g shop-rg --namespace-name shop-bus --topic-name orders \
+  --subscription-name billing -n '$Default'
 az servicebus topic subscription rule create -g shop-rg --namespace-name shop-bus --topic-name orders \
   --subscription-name billing -n created-only --filter-sql-expression "EventType = 'OrderCreated'"
 az servicebus queue show -g shop-rg --namespace-name shop-bus -n tasks --query countDetails
@@ -2581,4 +2594,4 @@ Found an error, an outdated limit or a change in a service's behaviour? Open an 
 
 ⭐ If this course helped, star the repo so other developers can find it.
 
-**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.
+**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](../LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.

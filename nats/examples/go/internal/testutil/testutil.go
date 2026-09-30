@@ -1,4 +1,9 @@
 // Package testutil holds helpers for the integration tests.
+//
+// By default every test starts its own embedded nats-server with JetStream
+// (single node, store in t.TempDir()), so `go test ./...` needs no Docker and
+// no running cluster. Set NATS_URL to run the same tests against an external
+// server or the three-node cluster from module 2.5 instead.
 package testutil
 
 import (
@@ -9,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nuid"
@@ -16,20 +22,73 @@ import (
 	"github.com/jwm1rr0rb10/NATSFREECOURSE/examples/go/internal/conn"
 )
 
-// Replicas returns $NATS_REPLICAS or 3 (the course cluster).
+// External reports whether the tests run against an external server ($NATS_URL).
+func External() bool { return os.Getenv("NATS_URL") != "" }
+
+// Replicas returns $NATS_REPLICAS, otherwise 3 for an external server (the
+// course cluster) and 1 for the embedded single node.
 func Replicas() int {
 	if v, err := strconv.Atoi(os.Getenv("NATS_REPLICAS")); err == nil && v > 0 {
 		return v
 	}
-	return 3
+	if External() {
+		return 3
+	}
+	return 1
+}
+
+// RunServer starts an embedded nats-server with JetStream that is shut down
+// when the test ends, and returns its client URL.
+func RunServer(t *testing.T) string {
+	t.Helper()
+	opts := &server.Options{
+		ServerName: "course-test",
+		Host:       "127.0.0.1",
+		Port:       -1, // random free port
+		JetStream:  true,
+		StoreDir:   t.TempDir(),
+		NoLog:      true,
+		NoSigs:     true,
+	}
+	s, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("embedded nats-server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(10 * time.Second) {
+		t.Fatal("embedded nats-server did not start")
+	}
+	t.Cleanup(func() {
+		s.Shutdown()
+		s.WaitForShutdown()
+	})
+	return s.ClientURL()
 }
 
 // Connect opens a connection and JetStream context, closed at test end.
+//
+// Without $NATS_URL it connects to a fresh embedded server. With $NATS_URL it
+// connects there; if that fails the test is skipped, unless
+// COURSE_REQUIRE_BROKER=1 (CI), in which case it fails.
 func Connect(t *testing.T) (*nats.Conn, jetstream.JetStream) {
 	t.Helper()
-	nc, err := conn.Connect("course-test-" + t.Name())
-	if err != nil {
-		t.Fatalf("connect to %s: %v (is the cluster running?)", conn.URLs(), err)
+	var (
+		nc  *nats.Conn
+		err error
+	)
+	if External() {
+		nc, err = conn.Connect("course-test-"+t.Name(), nats.MaxReconnects(0))
+		if err != nil {
+			if os.Getenv("COURSE_REQUIRE_BROKER") == "1" {
+				t.Fatalf("connect to %s: %v (COURSE_REQUIRE_BROKER=1)", conn.URLs(), err)
+			}
+			t.Skipf("connect to %s: %v (is the cluster running? unset NATS_URL to use an embedded server)", conn.URLs(), err)
+		}
+	} else {
+		nc, err = nats.Connect(RunServer(t), nats.Name("course-test-"+t.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(nc.Close)
 	js, err := jetstream.New(nc)

@@ -10,7 +10,7 @@
 
 **Облака без воды:** каждый модуль — это понятная теория, схемы, команды, которые можно запустить у себя (в том числе без облачного аккаунта, на эмуляторах), типичные ошибки и вопросы для самопроверки.
 
-Этот курс — часть серии. Если нужно глубже разобраться в самих моделях обмена сообщениями, смотри парные курсы: **NATS**, **Apache Kafka** и **RabbitMQ**. Здесь на них будут ссылки там, где облачный сервис повторяет их идеи.
+Этот курс — часть серии. Если нужно глубже разобраться в самих моделях обмена сообщениями, смотри парные курсы: **[NATS](../nats/READMEru.md)**, **[Apache Kafka](../kafka/READMEru.md)** и **[RabbitMQ](../rabbit/READMEru.md)**. Здесь на них есть ссылки там, где облачный сервис повторяет их идеи.
 
 ⭐ Если курс полезен, поставь звезду репозиторию: так его найдут другие разработчики.
 
@@ -92,7 +92,7 @@
 
 **Что нужно установить:** Docker, Python 3.10+, Git. CLI облаков: `aws` (AWS CLI v2), `az` (Azure CLI), `gcloud` (Google Cloud CLI) — ставь те, что нужны. Примеры кода — на Python (boto3, azure-servicebus, google-cloud-pubsub) и Go (aws-sdk-go-v2, azservicebus, cloud.google.com/go/pubsub/v2).
 
-**Запускаемые примеры:** docker-compose с эмуляторами трёх облаков, консьюмеры и тесты утверждений курса на Python и Go лежат в [`examples/`](examples/). CI каждую неделю прогоняет их, так что изменения в эмуляторах и SDK видны сразу.
+**Запускаемые примеры:** docker-compose с эмуляторами трёх облаков, консьюмеры и тесты утверждений курса на Python и Go лежат в [`examples/`](examples/). CI ([`examples.yml`](../.github/workflows/examples.yml)) прогоняет их при каждом push и раз в неделю: `go vet` и тесты на Go и Python против эмуляторов (moto, эмулятор Service Bus, эмулятор Pub/Sub) — на закреплённых и на свежих (`latest`) версиях образов, так что изменения в эмуляторах и SDK видны сразу.
 
 **Актуальность.** Облачные сервисы меняются постоянно и без номеров версий: лимиты растут, появляются новые возможности. В курсе указаны значения на 2026 год; перед проектированием сверяй лимиты с разделом *Quotas* документации сервиса. Например, SQS в августе 2025 года и EventBridge в январе 2026 года подняли максимальный размер сообщения с 256 КиБ до 1 МиБ, SNS в сентябре 2026 года разрешил до 1 МиБ через отдельный атрибут топика, а Google Pub/Sub Lite был отключён 18 марта 2026 года — старые статьи об этом не знают.
 
@@ -154,7 +154,7 @@
 | **Собственные сервисы облака** | SQS, SNS, EventBridge, Kinesis; Service Bus, Event Grid, Event Hubs; Pub/Sub, Eventarc, Cloud Tasks | Свой API, есть только в этом облаке |
 | **Управляемые open-source брокеры** | Amazon MSK (Kafka), Amazon MQ (RabbitMQ, ActiveMQ); Google Managed Service for Apache Kafka; Event Hubs с протоколом Kafka | Обычные клиенты Kafka и RabbitMQ, переносимость сохраняется |
 
-Управляемые Kafka и RabbitMQ подробно разобраны в парных курсах серии: всё, что там сказано о клиентах, гарантиях и проектировании, к ним применимо. Этот курс — про **собственные** сервисы облаков.
+Управляемые Kafka и RabbitMQ подробно разобраны в парных курсах серии ([Kafka](../kafka/READMEru.md), [RabbitMQ](../rabbit/READMEru.md)): всё, что там сказано о клиентах, гарантиях и проектировании, к ним применимо. Этот курс — про **собственные** сервисы облаков.
 
 ## 0.6 Общая модель: HTTP API, pull и push
 
@@ -439,7 +439,7 @@ producer --SendMessage--> [ очередь SQS ] <--ReceiveMessage-- ворке�
 | `MessageRetentionPeriod` | 4 дня | 1 мин – 14 дней | Сколько хранится неудалённое сообщение |
 | `ReceiveMessageWaitTimeSeconds` | 0 | 0 – 20 с | Long polling по умолчанию для очереди |
 | `DelaySeconds` | 0 | 0 – 15 мин | Задержка перед тем, как сообщение станет видимым |
-| `MaximumMessageSize` | 1 МиБ | 1 Б – 1 МиБ | Максимальный размер |
+| `MaximumMessageSize` | 1 МиБ | 1 КиБ – 1 МиБ | Максимальный размер |
 | `RedrivePolicy` | нет | — | DLQ и `maxReceiveCount` |
 | `SqsManagedSseEnabled` | включено | — | Шифрование на стороне сервера |
 
@@ -844,7 +844,7 @@ awsl scheduler create-schedule --name remind-order-1 \
 
 ## 5.6 Kinesis Data Streams: лог в AWS
 
-Когда нужен **лог** — порядок по ключу, повторное чтение, много независимых читателей, большие потоки, — в AWS есть два пути: **Kinesis Data Streams** и **Amazon MSK** (управляемая Kafka, см. курс по Kafka).
+Когда нужен **лог** — порядок по ключу, повторное чтение, много независимых читателей, большие потоки, — в AWS есть два пути: **Kinesis Data Streams** и **Amazon MSK** (управляемая Kafka, см. [курс по Kafka](../kafka/READMEru.md)).
 
 | Понятие Kinesis | Аналог в Kafka |
 |---|---|
@@ -1149,7 +1149,7 @@ az eventgrid event-subscription create -n new-uploads \
 
 - Партиции задаются при создании; порядок гарантирован внутри партиции (по partition key).
 - Хранение — от часа до 7 дней на Standard, до 90 дней на Premium и Dedicated.
-- **Kafka-эндпоинт** (Standard и выше): обычные Kafka-клиенты подключаются к Event Hubs, меняя только адрес и аутентификацию. Всё из курса по Kafka о producer'ах и consumer groups применимо, но это не настоящий Kafka: доступа к брокерам нет, часть Kafka API и настроек топиков поддерживается с ограничениями, лимиты свои. Перед миграцией сверь список поддерживаемых возможностей.
+- **Kafka-эндпоинт** (Standard и выше): обычные Kafka-клиенты подключаются к Event Hubs, меняя только адрес и аутентификацию. Всё из [курса по Kafka](../kafka/READMEru.md) о producer'ах и consumer groups применимо, но это не настоящий Kafka: доступа к брокерам нет, часть Kafka API и настроек топиков поддерживается с ограничениями, лимиты свои. Перед миграцией сверь список поддерживаемых возможностей.
 - **Capture** — автоматическая выгрузка потока в Blob Storage или Data Lake в формате Avro/Parquet.
 - Есть свой **Schema Registry**.
 
@@ -1222,7 +1222,7 @@ publisher --> [topic orders] --+--> subscription "billing"   (pull) --> 3 вор
 - `nack` — вернуть немедленно (или с задержкой по retry policy);
 - ничего — повтор после истечения deadline.
 
-**Retry policy** подписки: немедленно или с экспоненциальной задержкой между `min-retry-delay` (от 10 с) и `max-retry-delay` (до 600 с).
+**Retry policy** подписки: немедленно или с экспоненциальной задержкой между `min-retry-delay` и `max-retry-delay` (оба 0–600 с; по умолчанию 10 с и 600 с).
 
 ## 8.4 Публикация и получение на Python
 
@@ -1334,7 +1334,7 @@ for event in ["OrderCreated", "OrderPaid", "OrderShipped"]:
 
 ## 8.7 Exactly-once delivery
 
-Pull-подписка с `--enable-exactly-once-delivery` гарантирует, что успешно подтверждённое сообщение **не будет доставлено повторно**, пока не истёк его ack deadline:
+Pull-подписка с `--enable-exactly-once-delivery` гарантирует: пока сообщение на обработке (его ack deadline не истёк), оно не доставляется повторно, а успешно подтверждённое сообщение **не будет доставлено повторно** никогда:
 
 ```python
 from google.cloud.pubsub_v1.subscriber import exceptions as sub_exceptions
@@ -1364,7 +1364,7 @@ gcloud pubsub subscriptions create billing-eu --topic orders \
   --message-filter='attributes.event_type = "OrderCreated" AND hasPrefix(attributes.region, "eu-")'
 ```
 
-Отфильтрованные сообщения автоматически подтверждаются и не тарифицируются как доставка.
+Отфильтрованные сообщения Pub/Sub подтверждает автоматически: исходящий трафик (egress) за них не берётся, но плата за доставку сообщений (message delivery) начисляется.
 
 **Retention и seek** дают повторное чтение:
 
@@ -1440,7 +1440,7 @@ gcloud tasks queues create emails --location=europe-west1 \
 
 ## 9.3 Managed Service for Apache Kafka
 
-Для лога в Google Cloud — **Managed Service for Apache Kafka**: настоящий Kafka под управлением Google, с поддержкой Kafka Connect. Всё из курса по Kafka применимо напрямую. Именно на него Google предлагал мигрировать с отключённого Pub/Sub Lite.
+Для лога в Google Cloud — **Managed Service for Apache Kafka**: настоящий Kafka под управлением Google, с поддержкой Kafka Connect. Всё из [курса по Kafka](../kafka/READMEru.md) применимо напрямую. Именно на него Google предлагал мигрировать с отключённого Pub/Sub Lite.
 
 Pub/Sub или Kafka в Google Cloud:
 
@@ -1530,7 +1530,7 @@ Pub/Sub или Kafka в Google Cloud:
 | | AWS | Azure | Google Cloud |
 |---|---|---|---|
 | Задержка сообщения | `DelaySeconds` до 15 мин | Scheduled messages (любое время) | Нет в Pub/Sub; Cloud Tasks `schedule_time` |
-| Ретрай с backoff | `ChangeMessageVisibility` с растущей задержкой | `abandon` + свой backoff или scheduled resend | Retry policy подписки (10–600 с) |
+| Ретрай с backoff | `ChangeMessageVisibility` с растущей задержкой | `abandon` + свой backoff или scheduled resend | Retry policy подписки (0–600 с) |
 | Расписание | EventBridge Scheduler | Scheduled messages, Logic Apps | Cloud Scheduler, Cloud Tasks |
 
 ## 10.7 Повторное чтение
@@ -1624,7 +1624,7 @@ def handle_once(message_id: str, work) -> bool:
 
 ## 11.3 Transactional outbox в облаке
 
-Проблема двойной записи та же, что и везде (курсы по Kafka и RabbitMQ): записать в базу и опубликовать событие атомарно нельзя. Решение — outbox, и у облаков есть удобные способы доставлять его без своего опросчика:
+Проблема двойной записи та же, что и везде (курсы по [Kafka](../kafka/READMEru.md) и [RabbitMQ](../rabbit/READMEru.md)): записать в базу и опубликовать событие атомарно нельзя. Решение — outbox, и у облаков есть удобные способы доставлять его без своего опросчика:
 
 | Облако | База → поток изменений → брокер |
 |---|---|
@@ -1831,7 +1831,7 @@ IAM-политика консьюмера — только на свою оче�
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
-    "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"],
+    "Action": ["sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"],
     "Resource": "arn:aws:sqs:eu-central-1:123456789012:billing"
   }]
 }
@@ -2071,6 +2071,17 @@ resource "azurerm_servicebus_topic" "orders" {
   namespace_id = azurerm_servicebus_namespace.shop.id
 }
 
+# Подписка создаётся с правилом $Default (TrueFilter), а правила объединяются через OR:
+# пока $Default на месте, billing получает все сообщения. С этим флагом (azurerm 4.81+)
+# провайдер удаляет $Default сразу после создания подписки.
+provider "azurerm" {
+  features {
+    servicebus {
+      auto_delete_subscription_default_rule = true
+    }
+  }
+}
+
 resource "azurerm_servicebus_subscription" "billing" {
   name               = "billing"
   topic_id           = azurerm_servicebus_topic.orders.id
@@ -2229,7 +2240,7 @@ resource "google_pubsub_subscription_iam_member" "billing_subscriber" {
 - **Низкая задержка, edge, мультиоблако** — NATS.
 - **Смешанная система** — нормальна: Pub/Sub для событий в Google Cloud, Kafka для аналитического потока, внутренний NATS для RPC. Главное — понимать гарантии каждого звена.
 
-Парные курсы серии разбирают Kafka, RabbitMQ и NATS в той же глубине, что этот курс — облачные сервисы.
+Парные курсы серии разбирают [Kafka](../kafka/READMEru.md), [RabbitMQ](../rabbit/READMEru.md) и [NATS](../nats/READMEru.md) в той же глубине, что этот курс — облачные сервисы.
 
 ---
 
@@ -2332,6 +2343,8 @@ az servicebus queue create -g shop-rg --namespace-name shop-bus -n tasks \
   --max-delivery-count 5 --lock-duration PT1M --enable-session false
 az servicebus topic create -g shop-rg --namespace-name shop-bus -n orders
 az servicebus topic subscription create -g shop-rg --namespace-name shop-bus --topic-name orders -n billing
+az servicebus topic subscription rule delete -g shop-rg --namespace-name shop-bus --topic-name orders \
+  --subscription-name billing -n '$Default'
 az servicebus topic subscription rule create -g shop-rg --namespace-name shop-bus --topic-name orders \
   --subscription-name billing -n created-only --filter-sql-expression "EventType = 'OrderCreated'"
 az servicebus queue show -g shop-rg --namespace-name shop-bus -n tasks --query countDetails
@@ -2580,4 +2593,4 @@ Claim check: объект в S3, Blob Storage или Cloud Storage, в сооб�
 
 ⭐ Если курс помог, поставь звезду: так его найдут другие разработчики.
 
-**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.
+**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](../LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.

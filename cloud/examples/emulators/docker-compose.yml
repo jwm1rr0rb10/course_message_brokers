@@ -1,30 +1,51 @@
+# Образы закреплены на проверенных версиях; любой можно переопределить переменной окружения,
+# например MOTO_IMAGE=motoserver/moto:latest docker compose up -d (так CI проверяет и свежие образы).
+# `docker compose up -d --wait` дождётся healthcheck'ов; готовность Service Bus: curl -sf http://localhost:5300/health
 services:
   # AWS: SQS, SNS, EventBridge через moto (open source, без токена)
   aws:
-    image: motoserver/moto:latest
+    image: ${MOTO_IMAGE:-motoserver/moto:5.2.3}
     ports: ["4566:5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 5000), 2)"]
+      interval: 2s
+      retries: 30
 
   # Google Cloud Pub/Sub
   pubsub:
-    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    image: ${PUBSUB_IMAGE:-gcr.io/google.com/cloudsdktool/google-cloud-cli:587.0.0-emulators}
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=course-project
     ports: ["8085:8085"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8085"]
+      interval: 2s
+      retries: 60
 
   # Azure Service Bus emulator; сущности создаются из servicebus-config.json
   servicebus:
-    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
-    depends_on: [sql]
+    image: ${SERVICEBUS_IMAGE:-mcr.microsoft.com/azure-messaging/servicebus-emulator:2.0.1}
+    depends_on:
+      sql:
+        condition: service_healthy
     ports: ["5672:5672", "5300:5300"]
     environment:
       ACCEPT_EULA: "Y"
       SQL_SERVER: sql
       MSSQL_SA_PASSWORD: "Course_Passw0rd!"
+      SQL_WAIT_INTERVAL: "30" # сколько секунд ждать SQL Server при старте (по умолчанию 15)
     volumes:
       - ./servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
 
   # база метаданных для эмулятора Service Bus (Azure SQL Edge выведена из эксплуатации)
   sql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    image: ${MSSQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04}
+    # образ SQL Server есть только для amd64; на Apple Silicon Docker Desktop запускает его через эмуляцию (Rosetta)
+    platform: linux/amd64
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Course_Passw0rd!"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      retries: 30
+      start_period: 20s

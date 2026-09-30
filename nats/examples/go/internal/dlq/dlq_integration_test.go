@@ -1,5 +1,3 @@
-//go:build integration
-
 package dlq_test
 
 import (
@@ -117,7 +115,8 @@ func collectDLQ(t *testing.T, js jetstream.JetStream, subject string, want int, 
 			t.Fatal(err)
 		}
 		got = got[:0]
-		batch, err := oc.Fetch(want, jetstream.FetchMaxWait(2*time.Second))
+		// fetch more than wanted, so that callers can also detect duplicates
+		batch, err := oc.Fetch(want+10, jetstream.FetchMaxWait(2*time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,4 +128,77 @@ func collectDLQ(t *testing.T, js jetstream.JetStream, subject string, want int, 
 		t.Fatalf("DLQ has %d messages on %s, want %d", len(got), subject, want)
 	}
 	return got
+}
+
+// Module 14.3, the workqueue trap: a bare Term deletes the message, so the
+// mover has nothing to copy; dlq.Terminate publishes it first. On a limits
+// stream the mover sees the same message too, and the shared Nats-Msg-Id keeps
+// a single copy in the DLQ.
+func TestTerminateReachesDLQ(t *testing.T) {
+	for _, retention := range []jetstream.RetentionPolicy{jetstream.WorkQueuePolicy, jetstream.LimitsPolicy} {
+		t.Run(retention.String(), func(t *testing.T) {
+			_, js := testutil.Connect(t)
+			ctx := testutil.Ctx(t, 60*time.Second)
+
+			cfg := dlq.Config{Replicas: testutil.Replicas()}
+			mover, err := dlq.Setup(ctx, js, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runCtx, stop := context.WithCancel(ctx)
+			defer stop()
+			go func() { _ = dlq.Run(runCtx, js, mover, cfg) }()
+
+			name := testutil.Name("T_TERM")
+			subj := "tterm." + name
+			testutil.Stream(t, js, jetstream.StreamConfig{Name: name, Subjects: []string{subj + ".>"}, Retention: retention})
+			cons, err := js.CreateConsumer(ctx, name, jetstream.ConsumerConfig{
+				Durable: "WORKER", AckPolicy: jetstream.AckExplicitPolicy, MaxDeliver: 3,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// bare Term first (only checked on workqueue), then Terminate
+			for _, s := range []string{".bare", ".helper"} {
+				if _, err := js.Publish(ctx, subj+s, []byte(`{not json`)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < 2; i++ {
+				m, err := cons.Next(jetstream.FetchMaxWait(5 * time.Second))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if m.Subject() == subj+".bare" {
+					if err := m.TermWithReason("invalid json"); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				if err := dlq.Terminate(ctx, js, m, "invalid json"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			collectDLQ(t, js, "dlq."+name+".WORKER", 1, 15*time.Second)
+			// give the mover time to process both advisories, then count again
+			time.Sleep(2 * time.Second)
+			got := collectDLQ(t, js, "dlq."+name+".WORKER", 1, 5*time.Second)
+
+			bySubject := map[string]int{}
+			for _, m := range got {
+				bySubject[m.Headers().Get("Dlq-Original-Subject")]++
+			}
+			if bySubject[subj+".helper"] != 1 {
+				t.Fatalf("Terminate: %d copies in the DLQ, want exactly 1 (%v)", bySubject[subj+".helper"], bySubject)
+			}
+			if retention == jetstream.WorkQueuePolicy && bySubject[subj+".bare"] != 0 {
+				t.Fatalf("bare Term on a workqueue stream unexpectedly reached the DLQ")
+			}
+			if retention == jetstream.LimitsPolicy && bySubject[subj+".bare"] != 1 {
+				t.Fatalf("bare Term on a limits stream: %d copies in the DLQ, want 1", bySubject[subj+".bare"])
+			}
+		})
+	}
 }

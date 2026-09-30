@@ -3,7 +3,7 @@ x-kafka-common: &kafka-common
   image: ${KAFKA_IMAGE:-apache/kafka:4.3.1}
   restart: unless-stopped
   environment: &kafka-env
-    # один и тот же ID кластера на всех узлах (любая base64-строка из 16 байт)
+    # один и тот же ID кластера на всех узлах: 16 байт в base64url без padding (22 символа)
     CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
     KAFKA_PROCESS_ROLES: "broker,controller"
     KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"

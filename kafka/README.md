@@ -96,7 +96,7 @@
 
 **Version:** all examples target Apache Kafka 4.3, image `apache/kafka:4.3.1`. Since 4.0 Kafka runs **only in KRaft mode**: ZooKeeper has been removed entirely, not merely deprecated.
 
-**Runnable examples:** the cluster, a smoke test of the CLI commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). CI runs them every week against 4.3.1 and the newest Kafka image, so if a release changes behaviour described here, the build goes red.
+**Runnable examples:** the cluster, a smoke test of the CLI commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). CI ([`.github/workflows/examples.yml`](../.github/workflows/examples.yml)) runs `go vet`, the unit tests, the smoke test and the integration tests against the `docker-compose.yml` cluster on every push and weekly on a schedule, on 4.3.1 and on the newest Kafka image, so if a release changes behaviour described here, the build goes red.
 
 ---
 
@@ -381,7 +381,7 @@ Partition leaders are spread across brokers, so the load is shared by all nodes.
 
 ## 1.6 KRaft: a cluster without ZooKeeper
 
-Up to 3.x the cluster metadata (which topics exist, where leaders are, which settings apply) lived in ZooKeeper. Since Kafka 4.0 ZooKeeper is **gone** and Kafka stores metadata itself in **KRaft** (Kafka Raft) mode:
+The cluster metadata (which topics exist, where leaders are, which settings apply) used to live in ZooKeeper. KRaft has been production-ready since 3.3, ZooKeeper was deprecated in 3.5, and since Kafka 4.0 it is **gone** and Kafka stores metadata itself in **KRaft** (Kafka Raft) mode:
 
 ```
 +---------------- KRaft controller quorum -----------------+
@@ -430,7 +430,7 @@ Consequences:
 | **Log end offset (LEO)** | The offset the next record will get |
 | **High watermark (HW)** | Up to which offset data is in every ISR replica; consumers only see up to HW |
 | **Committed offset** | How far the group has reported processing |
-| **Lag** | `LEO − committed offset`: how many messages the group hasn't processed yet |
+| **Lag** | `HW − committed offset` (for `read_committed`, the LSO, last stable offset: the boundary before the first open transaction): how many available messages the group hasn't processed yet |
 
 **Lag is the key consumer metric.** Growing lag means the consumer can't keep up or has stopped.
 
@@ -501,7 +501,7 @@ x-kafka-common: &kafka-common
   image: apache/kafka:4.3.1
   restart: unless-stopped
   environment: &kafka-env
-    # the same cluster ID on every node (any base64 string of 16 bytes)
+    # the same cluster ID on every node: 16 bytes in base64url without padding (22 characters)
     CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
     KAFKA_PROCESS_ROLES: "broker,controller"
     KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"
@@ -1149,7 +1149,7 @@ A committed offset is **the number of the next message** the group should read. 
 
 | Method | How | Risk |
 |---|---|---|
-| Auto-commit (default) | Every `auto.commit.interval.ms` (5 s) during `poll()` | The commit may happen before processing finishes |
+| Auto-commit (default) | Every `auto.commit.interval.ms` (5 s) during `poll()`: it commits the offsets returned by the **previous** `poll()` | With synchronous processing inside the poll loop it is at-least-once (after a crash, the last few seconds are redelivered). Loss happens only if processing is asynchronous or handed to another thread: then the commit can overtake it |
 | Manual synchronous | `commitSync()` after processing | Latency on every commit |
 | Manual asynchronous | `commitAsync()` | Errors must be handled; a final `commitSync()` on shutdown |
 
@@ -1197,7 +1197,14 @@ public class BillingConsumer {
         props.put(ConsumerConfig.GROUP_PROTOCOL_CONFIG, "consumer");
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
-            Runtime.getRuntime().addShutdownHook(new Thread(consumer::wakeup));
+            Thread mainThread = Thread.currentThread();
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                consumer.wakeup();       // interrupt poll() in the main thread
+                try {
+                    mainThread.join();   // wait for close(), or the JVM exits first
+                } catch (InterruptedException ignored) {
+                }
+            }));
             consumer.subscribe(List.of("shop.orders.events"));
             try {
                 while (true) {
@@ -1237,12 +1244,13 @@ cl, err := kgo.NewClient(
 if err != nil {
 	log.Fatal(err)
 }
-defer cl.Close()
+// with BlockRebalanceOnPoll a plain Close() can hang if a batch is still held
+defer cl.CloseAllowingRebalance()
 
 for {
 	fetches := cl.PollFetches(ctx)
 	if fetches.IsClientClosed() || ctx.Err() != nil {
-		return
+		return // the unprocessed batch is not committed: it will be re-read
 	}
 	fetches.EachError(func(topic string, p int32, err error) {
 		log.Printf("fetch error %s/%d: %v", topic, p, err)
@@ -1250,9 +1258,12 @@ for {
 	fetches.EachRecord(func(r *kgo.Record) {
 		process(r) // idempotent
 	})
-	if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+	// ctx may have been cancelled (SIGTERM) during processing: commit the batch anyway
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	if err := cl.CommitUncommittedOffsets(commitCtx); err != nil {
 		log.Println("commit:", err)
 	}
+	cancel()
 	cl.AllowRebalance() // batch processed and committed, now it may happen
 }
 ```
@@ -1316,7 +1327,7 @@ What changes for you:
 - `session.timeout.ms` and `heartbeat.interval.ms` are set on the broker (`group.consumer.session.timeout.ms`, `group.consumer.heartbeat.interval.ms`), not in the client;
 - `partition.assignment.strategy` on the client is no longer used.
 
-In Kafka 4.3 the Java consumer logs a warning when it uses the classic protocol and recommends switching: `classic` is being prepared for removal. If you don't use Java, check KIP-848 support in your client library.
+In Kafka 4.3 a Java group consumer on the classic protocol logs an INFO-level banner at startup suggesting you try the new protocol. `classic` is not deprecated, though, and is still the default `group.protocol`. If you don't use Java, check KIP-848 support in your client library.
 
 ## 5.8 Avoiding unnecessary rebalances
 
@@ -1366,7 +1377,7 @@ If processing a single message is slow (an external API, heavy logic) and partit
 ### Self-check questions
 
 1. What exactly does a committed offset store: the last processed message or the next one?
-2. Why can auto-commit lose messages?
+2. Why is auto-commit safe with synchronous processing in the `poll()` loop but able to lose messages with asynchronous processing?
 3. When does `auto.offset.reset` apply, and why doesn't it help re-read data for an existing group?
 4. How does the new consumer group protocol differ from the classic one?
 5. What is `group.instance.id` for?
@@ -1775,7 +1786,7 @@ If nobody is left in the ISR (all in-sync replicas are dead), there are two opti
 
 Keep `false` for anything that matters. `true` is acceptable only where availability beats completeness (some logs and metrics).
 
-Kafka 4.x is developing Eligible Leader Replicas (KIP-966), a safer way to choose leaders when the ISR shrinks. Check the documentation for your version to see whether it is enabled and how it's configured.
+Kafka 4.x introduced Eligible Leader Replicas (KIP-966), a safer way to choose leaders when the ISR shrinks. Since 4.1 it is enabled by default on new clusters; on upgraded clusters you enable it with the `eligible.leader.replicas.version` feature. Once it is enabled, a broker-level `min.insync.replicas` is removed: set it at the cluster level.
 
 ## 8.4 Preferred leader and balancing
 
@@ -2796,7 +2807,7 @@ kt kafka-producer-perf-test.sh --topic perf --num-records 1000000 --record-size 
 
 # read
 kt kafka-consumer-perf-test.sh --bootstrap-server kafka-1:19092 --topic perf \
-  --messages 1000000 --group perf-test
+  --num-records 1000000 --group perf-test
 
 # end-to-end latency
 kt kafka-e2e-latency.sh --help
@@ -2909,7 +2920,7 @@ Kafka 4.3 added metrics for how full partitions are relative to retention limits
 
 ## 16.3 Consumer lag
 
-Lag = `log end offset − committed offset` for each partition of a group.
+Lag = `high watermark − committed offset` for each partition of a group (for a `read_committed` consumer, `LSO − committed offset`). The `LOG-END-OFFSET` column in `kafka-consumer-groups.sh` output actually shows the high watermark, not the leader's LEO.
 
 ```bash
 kt kafka-consumer-groups.sh --bootstrap-server kafka-1:19092 --describe --group billing
@@ -3228,7 +3239,7 @@ Kafka clients are compatible in both directions across a wide range of versions,
 | Auto-created topics | A typo creates a topic with default settings and one partition | Explicit creation via IaC |
 | A key with few values (`country`, `tenant`) | Hot partitions | A high-cardinality key |
 | Thousands of topics "per customer" | Load on metadata and the controller | A shared topic keyed by customer |
-| Auto-commit with complex processing | Losses on crashes | Manual commit after processing |
+| Auto-commit with asynchronous processing (thread pool, hand-off to a queue) | Losses on crashes: the commit overtakes processing | Manual commit after processing |
 | Committing before processing | At-most-once | Commit after successful processing |
 | Large messages (tens of MB) | Memory and replication pressure | Object storage + a reference in the event |
 | Kafka as a queryable database | Kafka can't search by field | Materialise into a database or a state store |
@@ -3379,7 +3390,7 @@ kafka-configs.sh --bootstrap-server $B --alter --entity-type users --entity-name
 
 # performance
 kafka-producer-perf-test.sh --topic t --num-records 1000000 --record-size 1024 --throughput -1 --producer-props bootstrap.servers=$B acks=all
-kafka-consumer-perf-test.sh --bootstrap-server $B --topic t --messages 1000000
+kafka-consumer-perf-test.sh --bootstrap-server $B --topic t --num-records 1000000
 
 # Kafka Streams
 kafka-streams-application-reset.sh --bootstrap-server $B --application-id my-app --input-topics t
@@ -3472,7 +3483,7 @@ heap: 4–8 GB, the rest of the memory for the page cache
 14. **What is the high watermark?** The last offset written to every ISR replica. Consumers don't see records past it.
 15. **What does the idempotent producer protect against?** Duplicates from network retries within one producer session, using the producer id and sequence numbers.
 16. **What is a committed offset and when do you commit it?** The next offset the group should read. Commit after processing: that's at-least-once.
-17. **Why is auto-commit dangerous?** The offset may be committed before processing finishes, and a crash loses messages.
+17. **Why is auto-commit dangerous?** The Java consumer commits in `poll()` only the offsets returned by the previous `poll()`, so with synchronous processing in the loop it is at-least-once (with redelivery after a crash). It is dangerous with asynchronous processing or when records are handed to another thread: the offset gets committed before processing finishes, and a crash loses messages.
 18. **When does auto.offset.reset apply?** Only when the group has no committed offset (a new group or the offset was deleted). To re-read for an existing group you reset offsets.
 19. **What is a rebalance and why is it harmful?** Redistribution of partitions when group membership changes. The old eager mode stopped the whole group; cooperative mode and the new KIP-848 protocol make it incremental.
 20. **What does static membership give you?** `group.instance.id` lets a consumer restart within the session timeout without a rebalance.
@@ -3608,4 +3619,4 @@ Found an error, an inaccuracy or an outdated setting? Open an issue or send a pu
 
 ⭐ If this course helped, star the repo so other developers can find it.
 
-**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.
+**Licence:** the course text is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the code samples under the [MIT License](../LICENSE). You're free to use, adapt and share the material, including for internal workshops, as long as you credit the source.

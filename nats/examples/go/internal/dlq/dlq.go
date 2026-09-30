@@ -4,6 +4,12 @@
 // ADVISORIES stream; a durable consumer then moves each failed message from
 // its original stream into the DLQ stream. If the mover is down when a
 // message fails, nothing is lost: it catches up when it starts again.
+//
+// One exception: on workqueue and interest streams the server treats Term as
+// an ack and deletes the message at once, so the mover finds nothing to copy.
+// Use Terminate there: it publishes the message to the DLQ itself and only
+// then calls Term. Both paths use the same Nats-Msg-Id, so on a limits stream,
+// where the mover sees the message too, the DLQ still stores it once.
 package dlq
 
 import (
@@ -93,8 +99,42 @@ func Run(ctx context.Context, js jetstream.JetStream, cons jetstream.Consumer, c
 		return err
 	}
 	<-ctx.Done()
-	cc.Drain()
+	cc.Drain() // let in-flight advisories finish
+	select {
+	case <-cc.Closed():
+	case <-time.After(10 * time.Second):
+		log.Printf("dlq: drain did not finish in 10s")
+	}
 	return nil
+}
+
+// Terminate moves a message that can never be processed to the DLQ and then
+// calls TermWithReason. Use it instead of a bare Term on workqueue and
+// interest streams, where Term deletes the message before the mover can read
+// it. If publishing fails the message is not terminated and err is returned:
+// Nak it (or let AckWait expire) and try again later.
+func Terminate(ctx context.Context, js jetstream.JetStream, msg jetstream.Msg, reason string) error {
+	meta, err := msg.Metadata()
+	if err != nil {
+		return fmt.Errorf("metadata: %w", err)
+	}
+	adv := Advisory{
+		Stream:     meta.Stream,
+		Consumer:   meta.Consumer,
+		StreamSeq:  meta.Sequence.Stream,
+		Deliveries: meta.NumDelivered,
+		Reason:     reason,
+	}
+	orig := &jetstream.RawStreamMsg{
+		Subject:  msg.Subject(),
+		Sequence: meta.Sequence.Stream,
+		Header:   msg.Headers(),
+		Data:     msg.Data(),
+	}
+	if _, err := js.PublishMsg(ctx, BuildDLQMessage(adv, orig)); err != nil {
+		return fmt.Errorf("publish to DLQ: %w", err)
+	}
+	return msg.TermWithReason(reason)
 }
 
 func handle(js jetstream.JetStream, m jetstream.Msg, cfg Config) {
@@ -104,39 +144,61 @@ func handle(js jetstream.JetStream, m jetstream.Msg, cfg Config) {
 	var adv Advisory
 	if err := json.Unmarshal(m.Data(), &adv); err != nil {
 		log.Printf("dlq: bad advisory: %v", err)
-		_ = m.Term()
+		if err := m.Term(); err != nil {
+			log.Printf("dlq: term advisory: %v", err)
+		}
 		return
 	}
 	if adv.Stream == DLQStream || adv.Stream == AdvisoryStream {
-		_ = m.Ack() // never loop on our own streams
+		ack(m) // never loop on our own streams
 		return
 	}
 
 	stream, err := js.Stream(ctx, adv.Stream)
 	if err != nil {
-		_ = m.NakWithDelay(5 * time.Second)
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			log.Printf("dlq: stream %s no longer exists, dropping advisory for seq %d", adv.Stream, adv.StreamSeq)
+			ack(m)
+			return
+		}
+		retry(m, "stream lookup", err)
 		return
 	}
 	orig, err := stream.GetMsg(ctx, adv.StreamSeq)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrMsgNotFound) {
-			log.Printf("dlq: %s seq %d already removed by retention", adv.Stream, adv.StreamSeq)
-			_ = m.Ack()
+			// removed by retention, or Term on a workqueue/interest stream
+			// (then Terminate has already put it into the DLQ)
+			log.Printf("dlq: %s seq %d is no longer in the stream", adv.Stream, adv.StreamSeq)
+			ack(m)
 			return
 		}
-		_ = m.NakWithDelay(5 * time.Second)
+		retry(m, "get original", err)
 		return
 	}
 
 	dlqMsg := BuildDLQMessage(adv, orig)
 	if _, err := js.PublishMsg(ctx, dlqMsg); err != nil {
-		_ = m.NakWithDelay(5 * time.Second)
+		retry(m, "publish to DLQ", err)
 		return
 	}
 	if cfg.AlertFunc != nil {
 		cfg.AlertFunc(adv)
 	}
-	_ = m.Ack()
+	ack(m)
+}
+
+func ack(m jetstream.Msg) {
+	if err := m.Ack(); err != nil {
+		log.Printf("dlq: ack advisory: %v", err)
+	}
+}
+
+func retry(m jetstream.Msg, what string, err error) {
+	log.Printf("dlq: %s: %v (retrying)", what, err)
+	if err := m.NakWithDelay(5 * time.Second); err != nil {
+		log.Printf("dlq: nak advisory: %v", err)
+	}
 }
 
 // BuildDLQMessage copies the original into a new message for the DLQ.
@@ -157,8 +219,9 @@ func BuildDLQMessage(adv Advisory, orig *jetstream.RawStreamMsg) *nats.Msg {
 	if adv.Reason != "" {
 		h.Set("Dlq-Reason", adv.Reason)
 	}
-	// a stable id makes the move itself idempotent if the mover retries
-	h.Set(jetstream.MsgIDHeader, fmt.Sprintf("dlq-%s-%d", adv.Stream, adv.StreamSeq))
+	// a stable id makes the move itself idempotent if the mover retries; the
+	// consumer is part of it because several consumers can fail the same message
+	h.Set(jetstream.MsgIDHeader, fmt.Sprintf("dlq-%s-%s-%d", adv.Stream, adv.Consumer, adv.StreamSeq))
 
 	return &nats.Msg{
 		Subject: "dlq." + adv.Stream + "." + adv.Consumer,

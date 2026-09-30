@@ -1,12 +1,12 @@
 # NATS Course 2026: a free NATS and JetStream course from zero to pro
 
-![NATS 2.12](https://img.shields.io/badge/NATS-2.12-27AAE1?logo=natsdotio&logoColor=white)
+![NATS 2.15](https://img.shields.io/badge/NATS-2.15-27AAE1?logo=natsdotio&logoColor=white)
 ![JetStream](https://img.shields.io/badge/JetStream-persistence-blue)
 ![Language English](https://img.shields.io/badge/language-english-red)
 ![Free course](https://img.shields.io/badge/price-free-brightgreen)
 ![junior to senior](https://img.shields.io/badge/level-junior%20→%20senior-orange)
 
-> **A complete free NATS course.** Theory, practice, Docker, Go, Python and Java, Core NATS and JetStream, subjects and wildcards, queue groups, request-reply, streams and consumers, delivery guarantees and deduplication, Key-Value and Object Store, microservices, clustering, superclusters and leaf nodes, monitoring, security, tuning and production architecture. All in a single README, current for **NATS Server 2.12 (2026)**.
+> **A complete free NATS course.** Theory, practice, Docker, Go, Python and Java, Core NATS and JetStream, subjects and wildcards, queue groups, request-reply, streams and consumers, delivery guarantees and deduplication, Key-Value and Object Store, microservices, clustering, superclusters and leaf nodes, monitoring, security, tuning and production architecture. All in a single README, current for **NATS Server 2.15 (2026)**.
 
 **NATS without the fluff:** every module gives you clear theory, diagrams, commands you can actually run, the mistakes people make, and self-check questions. Use it to learn NATS from scratch, to prepare for a backend, platform or DevOps interview, and to design a reliable NATS-based system in production.
 
@@ -76,7 +76,7 @@
 - [Module 17. NATS security: accounts, NKeys, JWT, TLS](#module-17-nats-security-accounts-nkeys-jwt-tls)
 - [Module 18. NATS in production: architecture and operations](#module-18-nats-in-production-architecture-and-operations)
 - [Module 19. Capstone project: an event-driven online shop](#module-19-capstone-project-an-event-driven-online-shop)
-- [What's new in NATS 2.11 and 2.12](#whats-new-in-nats-211-and-212)
+- [What's new in NATS 2.11, 2.12, 2.14 and 2.15](#whats-new-in-nats-211-212-214-and-215)
 - [NATS CLI cheat sheet](#nats-cli-cheat-sheet)
 - [Configuration cheat sheet](#configuration-cheat-sheet)
 - [NATS interview questions with answers](#nats-interview-questions-with-answers)
@@ -96,9 +96,9 @@
 
 **What to install:** Docker and Docker Compose, the `nats` CLI (natscli), Git, any IDE. Go 1.26+ for the Go examples (the current `nats.go` requires it), Python 3.10+ for Python, Java 17+ for Java.
 
-**Version:** all examples target NATS Server 2.12.x, image `nats:2.12-alpine`. JetStream is enabled with the `-js` flag and is **off by default**.
+**Version:** all examples target NATS Server 2.15.x, image `nats:2.15-alpine`. JetStream is enabled with the `-js` flag and is **off by default**.
 
-**Runnable examples:** the cluster, a smoke test of the CLI commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). CI runs them against 2.12 and the newest 2.x release every week, so if a release changes behaviour described here, the build goes red.
+**Runnable examples:** the cluster, a smoke test of the CLI commands, Go and Python code and integration tests for the course's claims live in [`examples/`](examples/). On every push and once a week, CI ([`examples.yml`](../.github/workflows/examples.yml)) runs `go vet`, the Go tests (including the integration tests on an embedded `nats-server`) and the smoke test against the docker compose cluster, on the pinned 2.15 image and on the newest release. If a release changes behaviour described here, the build goes red.
 
 ---
 
@@ -500,7 +500,7 @@ JetStream:
 ## 2.1 The fastest way to run NATS
 
 ```bash
-docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2.15-alpine -js -m 8222
 ```
 
 - `4222` — client port;
@@ -529,7 +529,7 @@ brew tap nats-io/nats-tools && brew install nats-io/nats-tools/nats
 go install github.com/nats-io/natscli/nats@latest
 
 # Or just Docker
-docker run --rm -it --network host natsio/nats-box:latest
+docker run --rm -it --network host natsio/nats-box:0.20.0
 ```
 
 Contexts save you from endless flags:
@@ -592,7 +592,7 @@ port: 4222
 http: 8222
 
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"          # the server appends jetstream itself: /data/jetstream
   max_memory_store: 1GB
   max_file_store: 10GB
 }
@@ -631,7 +631,7 @@ Why this block matters: as soon as a config defines **any** user, the server req
 
 ```yaml
 x-nats-common: &nats-common
-  image: nats:2.12-alpine
+  image: nats:2.15-alpine
   restart: unless-stopped
 
 services:
@@ -663,7 +663,7 @@ services:
       - nats3-data:/data
 
   nats-box:
-    image: natsio/nats-box:latest
+    image: natsio/nats-box:0.20.0
     container_name: nats-box
     entrypoint: ["sleep", "infinity"]
     depends_on: [nats-1, nats-2, nats-3]
@@ -730,6 +730,8 @@ docker exec nats-1 ls -R /data/jetstream
             │   └── BILLING/
             └── meta.inf     # stream configuration
 ```
+
+The server always appends a `jetstream` subdirectory to `store_dir`: with `store_dir: "/data"` the data lives in `/data/jetstream/`, while `store_dir: "/data/jetstream"` ends up in `/data/jetstream/jetstream/`.
 
 Core NATS stores **nothing**: stop the server and subscription state is gone. Everything that must survive a restart lives in `store_dir`. Mount it on a persistent volume, otherwise a pod restart in Kubernetes leaves you with an empty stream.
 
@@ -827,7 +829,7 @@ shop.*.created           ✘ too many tokens
 shop.orders.eu           ✘ too few tokens
 ```
 
-Wildcards work **only in subscriptions and in stream configuration**. You cannot publish to a wildcard: `nats pub shop.orders.* ...` sends a message to a subject that literally contains an asterisk, and nobody receives it.
+Wildcards work **only in subscriptions and in stream configuration**. You cannot publish to a wildcard: `nats pub shop.orders.* ...` does not fan out to every matching subject, it sends a message to a subject that literally contains an asterisk. The server (outside pedantic mode) doesn't reject it: a `shop.orders.created` subscriber won't get it, but `shop.orders.*` and `shop.orders.>` subscriptions will, and a stream on `shop.orders.>` stores it. Validate subjects before publishing.
 
 ## 3.3 Designing the subject space
 
@@ -976,7 +978,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sub.SetPendingLimits(65536, 64*1024*1024) // slow-consumer protection
+	// client buffer (500,000 messages / 64 MB by default): when it overflows,
+	// messages are dropped and you get a slow consumer error
+	sub.SetPendingLimits(1_000_000, 256*1024*1024)
 
 	msg := nats.NewMsg("shop.orders.created")
 	msg.Header.Set("Event-Type", "OrderCreated")
@@ -1484,15 +1488,15 @@ In production it's almost always durable: restarting a pod must not reset progre
 
 ## 6.2 Pull vs Push
 
-| | **Pull (recommended)** | **Push (legacy)** |
+| | **Pull (recommended)** | **Push** |
 |---|---|---|
 | Who initiates | The client asks for N messages | The server pushes to a subject |
 | Flow control | Natural: you don't ask, you don't get | Requires `flow_control` and `idle_heartbeat` |
 | Scaling | Just add another instance sharing the consumer | Requires a queue group and `deliver_group` |
-| Failure behaviour | Client dies, nothing is lost | Messages fly into the void |
-| Use when | Almost always | Legacy code, niche scenarios |
+| Failure behaviour | Client dies: unacked messages are redelivered after `AckWait` | The same with `AckExplicit`; only what was sent to a dead client with `ack none` is lost (as with pull) |
+| Use when | Almost always | You need server-driven delivery to a subject, existing push-based code |
 
-**Pull consumers are the recommended default**, and the modern client APIs (the `jetstream` packages) are built around them. Every example below uses them.
+**Pull consumers are the recommended default**, and the modern client APIs (the `jetstream` packages) are built around them. Push is not deprecated (`nats.go/jetstream` has `CreatePushConsumer`), it's just needed less often. Every example below uses pull.
 
 ## 6.3 Ack policy and what each reply means
 
@@ -1527,8 +1531,8 @@ nats consumer add ORDERS BILLING \
   --max-pending 1000 \
   --backoff linear \
   --backoff-steps 5 \
-  --backoff-min 1s \
-  --backoff-max 1m \
+  --backoff-min 30s \
+  --backoff-max 5m \
   --replicas 3 \
   --defaults
 ```
@@ -1540,18 +1544,19 @@ nats consumer add ORDERS BILLING \
 | `ack_wait` | 30s | How long the server waits for an ack before redelivering |
 | `max_deliver` | -1 (infinite) | How many delivery attempts |
 | `max_ack_pending` | 1000 | How many unacknowledged messages may be outstanding: **this is** your concurrency limiter |
-| `backoff` | none | Delay array for redeliveries |
+| `backoff` | none | Redelivery delays applied when the ack wait expires; replaces `ack_wait` |
 | `replicas` | same as stream | Replicas of the consumer state |
 | `inactive_threshold` | 5s (ephemeral) | When to delete an unused consumer |
 
 **`max_ack_pending` is the most underrated setting.** It is also backpressure: when workers fall behind, the server stops handing out new messages.
 
-**Two backoff rules that trip people up:**
+**Three backoff rules that trip people up:**
 
-- when `backoff` is set, it **replaces `ack_wait` for redeliveries**: the first delivery waits `ack_wait`, redelivery N waits `backoff[N-1]` (the last value repeats if there are more attempts than entries);
+- backoff applies **only when the ack timer expires** (the process crashed, hung, never replied). When `backoff` is set, the server **overwrites `ack_wait` with `backoff[0]`**: after the first delivery it waits `backoff[0]`, after the k-th `backoff[k-1]` (the last value repeats if there are more attempts than entries). So `backoff[0]` must cover your processing time (p99), or the message is redelivered while it's still being processed. In pedantic mode the server doesn't replace it silently but rejects the config if `ack_wait` differs from `backoff[0]`;
+- `Nak()` **does not use** backoff: the message is redelivered immediately. `NakWithDelay(d)` sets its own delay, but on a consumer with backoff the server offsets it (in effect `d + backoff[k-1] − backoff[0]`). So for retries on errors pick one: a consumer without backoff plus `NakWithDelay` with a delay based on the delivery count (6.5), or backoff and no reply at all on a transient error;
 - `max_deliver` can't be **smaller** than the number of backoff entries (the server rejects the config). Make it one larger, so the last delay is actually used before the consumer gives up.
 
-With the CLI flags above (`linear`, 5 steps, 1s to 1m), natscli computes evenly spaced delays of 1s, ~13s, ~25s, ~36s, ~48s: the last step stays below the maximum. Check the result with `nats consumer info ORDERS BILLING`. For a hand-tuned schedule such as 1s, 5s, 30s, set the array explicitly in code (6.5) or in a JSON config (`nats consumer add ORDERS --config billing.json`).
+With the CLI flags above (`linear`, 5 steps, 30s to 5m), natscli computes evenly spaced delays of 30s, 1m24s, 2m18s, 3m12s, 4m6s: the last step stays below the maximum, and `ack_wait` becomes the first delay (here it matches `--wait 30s`). Check the result with `nats consumer info ORDERS BILLING`. For a hand-tuned schedule such as 30s, 1m, 5m, set the array explicitly in code or in a JSON config (`nats consumer add ORDERS --config billing.json`).
 
 ## 6.5 A pull consumer in Go
 
@@ -1562,19 +1567,26 @@ cons, err := js.CreateOrUpdateConsumer(ctx, "ORDERS", jetstream.ConsumerConfig{
 	AckPolicy:     jetstream.AckExplicitPolicy,
 	DeliverPolicy: jetstream.DeliverAllPolicy,
 	MaxDeliver:    5,
-	AckWait:       30 * time.Second,
+	AckWait:       30 * time.Second, // ≈ p99 processing: how long the server waits for an ack before redelivering
 	MaxAckPending: 500,
-	BackOff:       []time.Duration{time.Second, 5 * time.Second, 30 * time.Second},
+	// no BackOff here: the worker sets retry delays itself via NakWithDelay (6.4)
 })
 if err != nil {
 	log.Fatal(err)
 }
 
+// retry delays: the 1st failure waits 1s, the 2nd 5s and so on, the last one repeats
+retryDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second, time.Minute}
+
 // option 1: callback (usually what you want)
 cc, err := cons.Consume(func(msg jetstream.Msg) {
 	if err := process(msg.Data()); err != nil {
 		if isTemporary(err) {
-			msg.NakWithDelay(5 * time.Second)
+			delay := retryDelays[len(retryDelays)-1]
+			if meta, err := msg.Metadata(); err == nil && int(meta.NumDelivered) <= len(retryDelays) {
+				delay = retryDelays[meta.NumDelivered-1]
+			}
+			msg.NakWithDelay(delay)
 		} else {
 			msg.Term() // never retry
 		}
@@ -1911,7 +1923,7 @@ The relay may publish twice (for example, crashing between `Publish` and `UPDATE
 | User notifications | JetStream, at-least-once, a duplicate is harmless |
 | Domain business events | JetStream + `Nats-Msg-Id` + outbox + idempotent consumer |
 | Money movements | All of the above + `processed_events` + double-ack |
-| Task queues | A `workqueue` stream + `max_deliver` + DLQ |
+| Task queues | A `workqueue` stream + `max_deliver` + DLQ (on `Term`, publish to the DLQ before terminating, see 14.3) |
 
 ### Self-check questions
 
@@ -1972,7 +1984,7 @@ Stream limits won't save you when one tenant eats the whole disk. Set limits a l
 
 ```hcl
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"
   max_memory_store: 4GB      # server-wide
   max_file_store: 500GB
 }
@@ -2193,7 +2205,7 @@ A bucket TTL is mandatory here, otherwise a crashed process holds the lock forev
 - keys follow subject rules: a dot creates hierarchy, spaces are forbidden;
 - no query-by-value, no secondary indexes, no multi-key transactions;
 - `History` above 64 is not supported;
-- deletes leave a marker (`purge` removes it entirely).
+- deletes leave a marker; `purge` wipes the key's history but also leaves one PURGE marker (old markers are removed by `PurgeDeletes` in the client or `nats kv compact`).
 
 ### Practice
 
@@ -2442,7 +2454,7 @@ leafnodes {
   ]
 }
 
-jetstream { store_dir: "/data/js", domain: "edge-lon-42" }
+jetstream { store_dir: "/data", domain: "edge-lon-42" }
 ```
 
 Why you'd want it:
@@ -2476,7 +2488,7 @@ Without domains a JetStream-enabled leaf and the central cluster start fighting 
 
 ```hcl
 server_name: "edge-lon-42"       # required for MQTT
-jetstream { store_dir: "/data/js" }   # MQTT sessions and QoS 1 are stored in JetStream
+jetstream { store_dir: "/data" }   # MQTT sessions and QoS 1 are stored in JetStream
 
 mqtt {
   port: 1883
@@ -2498,7 +2510,7 @@ How MQTT maps onto NATS:
 | QoS 0 | Core NATS delivery |
 | QoS 1, retained messages, sessions | JetStream streams created by the server |
 
-So a device publishing to `factory/line1/temp` is visible to NATS services on `factory.line1.temp`, and vice versa. Avoid dots in MQTT topic names: they become token separators.
+So a device publishing to `factory/line1/temp` is visible to NATS services on `factory.line1.temp`, and vice versa. Avoid dots in MQTT topic names: the server turns `.` into `//`, so the topic `factory/line.1` becomes the NATS subject `factory.line//1`.
 
 Over WebSocket, browser code uses the official JavaScript client and gets the same subjects, permissions and accounts as any other client.
 
@@ -2630,19 +2642,31 @@ An application that doesn't distinguish these is doomed: it will either spin on 
 ```bash
 nats consumer add ORDERS BILLING --pull --ack explicit \
   --max-deliver 6 \
-  --backoff linear --backoff-steps 5 --backoff-min 1s --backoff-max 5m
+  --backoff linear --backoff-steps 5 --backoff-min 30s --backoff-max 5m
 ```
 
 ```
-attempt 1 -> error -> wait 1s
-attempt 2 -> error -> wait ~1m
-attempt 3 -> error -> wait ~2m
-attempt 4 -> error -> wait ~3m
-attempt 5 -> error -> wait ~4m
-attempt 6 -> error -> MAX_DELIVERIES advisory -> no more deliveries
+delivery 1 -> no ack (crashed, hung, too slow) -> wait 30s (backoff[0], now also ack_wait)
+delivery 2 -> no ack -> wait ~1m24s
+delivery 3 -> no ack -> wait ~2m18s
+delivery 4 -> no ack -> wait ~3m12s
+delivery 5 -> no ack -> wait ~4m6s
+delivery 6 -> no ack -> after ~4m6s MAX_DELIVERIES advisory -> no more deliveries
 ```
 
-`linear` spreads the delays evenly from min towards max (with natscli the last delay stays one step below max). If you want a growing schedule such as 1s, 15s, 1m, 3m, 5m, set the array explicitly (`BackOff` in code or `"backoff"` in a JSON consumer config). `max_deliver` can't be smaller than the number of backoff entries; here 6 attempts for 5 delays uses every delay.
+`linear` spreads the delays evenly from min towards max (with natscli the last delay stays one step below max). If you want a growing schedule such as 30s, 1m, 3m, 5m, 15m, set the array explicitly (`BackOff` in code or `"backoff"` in a JSON consumer config). `max_deliver` can't be smaller than the number of backoff entries; here 6 attempts for 5 delays uses every delay.
+
+This schedule only works while the worker **stays silent**. `Nak()` redelivers immediately, bypassing backoff, so a handler that `Nak()`s every error burns through all 6 attempts in milliseconds. If the worker detects transient errors itself, use a consumer without backoff (`ack_wait` ≈ p99 processing) and compute the delay from the delivery count:
+
+```go
+delays := []time.Duration{time.Second, 15 * time.Second, time.Minute, 3 * time.Minute, 5 * time.Minute}
+meta, err := msg.Metadata()
+if err != nil {
+	return // not a JetStream message
+}
+n := min(int(meta.NumDelivered), len(delays))
+msg.NakWithDelay(delays[n-1])
+```
 
 Without backoff, a struggling database gets a storm of retries at the exact moment it is least able to cope.
 
@@ -2714,9 +2738,13 @@ mover.Consume(func(m jetstream.Msg) {
 		return
 	}
 	orig, err := stream.GetMsg(ctx, adv.StreamSeq)
-	if err != nil {
-		log.Println("original already removed by retention:", err)
+	if errors.Is(err, jetstream.ErrMsgNotFound) {
+		log.Println("original is gone (retention, or Term on a workqueue):", err)
 		m.Ack()
+		return
+	}
+	if err != nil {
+		m.NakWithDelay(5 * time.Second) // transient error: try again later
 		return
 	}
 
@@ -2735,8 +2763,9 @@ mover.Consume(func(m jetstream.Msg) {
 	if adv.Reason != "" {
 		h.Set("Dlq-Reason", adv.Reason)
 	}
-	// a stable id makes the move itself idempotent if the mover retries
-	h.Set("Nats-Msg-Id", fmt.Sprintf("dlq-%s-%d", adv.Stream, adv.StreamSeq))
+	// a stable id makes the move itself idempotent if the mover retries;
+	// it includes the consumer because several consumers can fail the same message
+	h.Set("Nats-Msg-Id", fmt.Sprintf("dlq-%s-%s-%d", adv.Stream, adv.Consumer, adv.StreamSeq))
 
 	dlqMsg := &nats.Msg{
 		Subject: "dlq." + adv.Stream + "." + adv.Consumer,
@@ -2756,7 +2785,8 @@ mover.Consume(func(m jetstream.Msg) {
 Notes:
 
 - the original is fetched by `stream_seq`, so this works as long as retention hasn't removed it yet: keep `max_age` on the source stream comfortably longer than your total retry time;
-- with `workqueue` retention a message that exhausted `max_deliver` stays in the stream (it was never acked), so it is still available here, but it also still counts against limits: purge it after moving if you need to;
+- **the `workqueue` and `interest` trap**: on these streams `Term` counts as an ack, and the server deletes the message at once (with `interest`, if no other consumer is still interested). By the time `MSG_TERMINATED` arrives the original is gone, `GetMsg` returns "not found", and the message is lost. So here the consumer publishes the message to the DLQ itself (same `Dlq-*` headers, same `Nats-Msg-Id`) and calls `Term` only after the PubAck; `dlq.Terminate` in [`examples/`](examples/) does exactly that. The alternative is to keep streams that need a DLQ on `Term` on `limits` retention;
+- a message that exhausted `max_deliver` is **not** acked by the server, so even with `workqueue` it stays in the stream and the mover finds it, but it also still counts against limits: purge it after moving if you need to;
 - the application user needs permission to subscribe to `$JS.EVENT.ADVISORY.>` inside its account (module 17).
 
 Reprocessing after you fix the bug:
@@ -2804,7 +2834,7 @@ nats sub "$JS.EVENT.ADVISORY.>" --headers-only
 
 ### Practice
 
-1. Write a handler that always fails and watch the backoff chain.
+1. Write a handler that never replies to a message (no `Ack`, no `Nak`) and watch the backoff chain via `NumDelivered` and the delivery times. Then replace the silence with `Nak()` and confirm backoff no longer applies: redeliveries come immediately.
 2. Implement the DLQ above and confirm messages land in it. Then stop the mover, trigger a failure, start the mover again and confirm the message still reaches the DLQ.
 3. Publish broken JSON and make it reach the DLQ on the first attempt via `Term()`.
 
@@ -2835,9 +2865,9 @@ nats bench sub bench.core --msgs 1000000 --clients 5
 nats bench service serve bench.rpc --clients 5
 nats bench service request bench.rpc --msgs 100000 --clients 10
 
-# JetStream
-nats bench js pub ORDERS --msgs 200000 --size 512 --clients 5
-nats bench js pub ORDERS --msgs 200000 --size 512 --clients 5 --batch 500   # async
+# JetStream (--create creates the benchstream test stream)
+nats bench js pub sync bench.js --create --msgs 200000 --size 512 --clients 5
+nats bench js pub async bench.js --create --msgs 200000 --size 512 --clients 5 --batch 500
 ```
 
 Always measure **on your hardware, with your message sizes and your topology**. Other people's numbers are useless.
@@ -2872,7 +2902,7 @@ ping_interval: "2m"
 ping_max: 2
 
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"
   max_file_store: 500GB
   max_memory_store: 4GB
   sync_interval: "2m"     # fsync frequency (the default); "always" is safer but much slower
@@ -2965,7 +2995,7 @@ Key metrics:
 | `jetstream_consumer_num_ack_pending` | Outstanding acks |
 | `jetstream_consumer_num_redelivered` | Redeliveries |
 | `jetstream_stream_total_bytes` / `total_messages` | Stream fill level |
-| `jetstream_server_jetstream_disk_used` | Free space |
+| `jetstream_server_jetstream_disk_used` | Disk space used by JetStream (compare with `max_file_store`) |
 
 ## 16.3 What to alert on
 
@@ -3103,7 +3133,9 @@ nsc generate creds --account SHOP --name order-service > order-service.creds
 
 # the server has to know about the operator: generate its resolver config once
 nsc generate config --nats-resolver --sys-account SYS > resolver.conf
-# add `include resolver.conf` to nats.conf, restart, then push accounts
+# add `include resolver.conf` to nats.conf and restart the server;
+# then tell nsc where to push account JWTs, and push them
+nsc edit operator --account-jwt-server-url nats://nats.company.com:4222
 nsc push --all
 ```
 
@@ -3140,10 +3172,20 @@ cluster {
 
 TLS is configured separately for clients, routes, gateways and leafnodes. Encrypt intra-cluster traffic too: a route connection sees every message in the cluster.
 
-With mTLS you can map users to certificate CNs:
+With mTLS you can map users to certificates. With `verify_and_map` the server looks up the `users` list by a name from the certificate's SAN (email, DNS, URI) and, failing that, by the full subject DN, not just the CN. A user that isn't in the list is rejected:
 
 ```hcl
-tls { verify_and_map: true }   # certificate CN = user name
+tls {
+  # cert_file, key_file, ca_file ...
+  verify: true
+  verify_and_map: true
+}
+authorization {
+  users: [
+    { user: "order-service@shop.example" }        # email or DNS from the SAN
+    { user: "CN=billing,OU=payments,O=Shop" }     # or the full subject DN (RFC 2253)
+  ]
+}
 ```
 
 ## 17.6 Limits as a security control
@@ -3155,7 +3197,12 @@ accounts {
       max_connections: 100
       max_subscriptions: 1000
       max_payload: 256KB
-      max_data: 10GB
+      max_leafnodes: 0
+    }
+    # data volume is capped by the account's JetStream limits
+    jetstream: {
+      max_file: 10GB
+      max_memory: 256MB
     }
   }
 }
@@ -3317,7 +3364,7 @@ NATS is protocol-compatible across minor versions, but upgrading **one node at a
 
 1. Orders are created over HTTP, and the event is published to JetStream **in the same transaction as the database write** (outbox).
 2. Every event carries a `Nats-Msg-Id` and is never duplicated on retries.
-3. Payment Service processes idempotently, `Nak`s with backoff on transient errors and `Term`s on invalid data.
+3. Payment Service processes idempotently, `NakWithDelay`s with a delay that grows with the delivery count on transient errors and `Term`s on invalid data.
 4. Warehouse reserves stock and survives redelivery.
 5. Analytics reads the stream with an ordered consumer and builds an in-memory projection.
 6. Notification pushes updates through Core NATS to a WebSocket gateway.
@@ -3345,7 +3392,7 @@ NATS is protocol-compatible across minor versions, but upgrading **one node at a
 
 ```bash
 # load
-nats bench js pub ORDERS --msgs 100000 --size 512 --clients 5
+nats bench js pub async shop.orders.bench --stream ORDERS --msgs 100000 --size 512 --clients 5
 
 # during the load
 docker stop nats-2
@@ -3361,7 +3408,7 @@ If after all the chaos `num_pending` is back to zero, the DLQ is empty and there
 
 ---
 
-# What's new in NATS 2.11 and 2.12
+# What's new in NATS 2.11, 2.12, 2.14 and 2.15
 
 The modules above use features that have been stable for years. Recent releases added several that change how you'd solve some of the course's problems. Field and header names below are given for orientation: check the release notes and ADRs for your exact server and client versions before relying on them.
 
@@ -3376,6 +3423,22 @@ The modules above use features that have been stable for years. Recent releases 
 
 - **Atomic batch publishing.** A group of messages is committed to a stream all together or not at all, which helps with events that must appear together.
 - **Distributed counters.** A stream can be configured to treat messages as increments on a per-subject counter, merged correctly across mirrors and sources.
+
+**NATS 2.14** ([release notes](https://github.com/nats-io/nats-server/releases/tag/v2.14.0), 30 April 2026; 2.13 was skipped)
+
+- **Repeating message schedules.** The `Nats-Schedule` header accepts repeating schedules (`@every 5m`, `@hourly`) and crontab-like syntax.
+- **Consumer reset.** A consumer can be moved back to an earlier sequence via `$JS.API.CONSUMER.RESET.<stream>.<consumer>` without deleting and recreating it.
+- **Mirrors and sources from `interest` and `workqueue` streams** are now supported.
+- **Fast-ingest batch publishing** for clients that support it.
+- **Feature flags in the server config.** The `js_ack_fc_v2` flag switches ack and flow control to new subjects (`$JS.ACK.<domain>.<acchash>.…`); it becomes the default in 2.16, so ACLs on ack subjects will need updating.
+
+**NATS 2.15** ([release notes](https://github.com/nats-io/nats-server/releases/tag/v2.15.0), 17 September 2026)
+
+- **At most 1000 consumers per stream by default**, unless `max_consumers` is set on the stream or in the account limits. Existing consumers are not affected, but new ones beyond the limit can't be created; change the server default with `default_max_consumers` in the JetStream limits (`-1` disables it).
+- **Safer replica moves and scaling.** A new desired-state engine for the metalayer, cancelling a stream move (`$JS.API.STREAM.CANCEL_MOVE`) and evacuating streams off a node before maintenance (`$JS.API.SERVER.EVACUATE`).
+- **Metalayer rescue** (`$JS.API.META.RESCUE`): temporarily lowers the quorum when nodes are permanently lost.
+- **A new stream backup/restore format** that also includes non-replicated consumers on follower nodes.
+- With `sync_interval: always`, replicated streams now only sync the Raft log to disk, which makes writes considerably faster.
 
 When you use any of these, pin the minimum server version in your deployment docs: older servers in a mixed cluster may ignore or reject the new fields.
 
@@ -3484,7 +3547,7 @@ ack_policy: explicit
 ack_wait: 30s            (slightly above p99 processing time)
 max_deliver: 5
 max_ack_pending: 500     (≈ worker count × 10)
-backoff: 1s, 10s, 1m, 5m   (replaces ack_wait for redeliveries; max_deliver >= 4, and 5 uses every delay)
+backoff: 30s, 1m, 5m, 15m (optional: only for an expired ack wait; ack_wait becomes backoff[0], Nak ignores it)
 filter_subject: a concrete subject
 ```
 
@@ -3535,12 +3598,12 @@ JetStream limits on every account
 15. **Why can't one subject be in two streams?** It would be ambiguous where to store the message; use mirrors and sources for copies.
 16. **How does deduplication work?** The stream remembers `Nats-Msg-Id` for `duplicate_window` and replies `PubAck{duplicate:true}` to repeats.
 17. **How do you achieve exactly-once?** Publish deduplication plus idempotent consumer processing. There is no single setting.
-18. **Pull or push consumers, and why?** Pull: natural flow control, easier scaling, nothing is lost when the client dies.
+18. **Pull or push consumers, and why?** Pull: natural flow control and easy horizontal scaling. Reliability is the same: with `AckExplicit` an unacked message comes back after `AckWait`, even if the client died.
 19. **How do you scale processing?** Several instances on one durable pull consumer; there are no partitions and no rebalance.
 20. **How do you guarantee per-entity ordering?** A subject per entity with a filtered consumer, sharding by subject token, or `max_ack_pending=1`.
 21. **What is a slow consumer?** A subscriber that can't keep up; the server drops its messages and increments a counter in `/varz`.
 22. **What is `num_pending`?** The number of messages the consumer still has to receive, i.e. the lag.
-23. **How do you build a DLQ?** Subscribe to the `MAX_DELIVERIES` advisory, fetch the original by `stream_seq` and move it to a separate stream.
+23. **How do you build a DLQ?** Capture the `MAX_DELIVERIES` and `MSG_TERMINATED` advisories in a stream, read them with a durable consumer, fetch the original by `stream_seq` and move it to a separate stream. On `workqueue`/`interest` streams `Term` deletes the original, so there the consumer publishes the message to the DLQ itself before `Term`.
 24. **How is the KV Store implemented?** A stream with `max_msgs_per_subject` and `$KV.<bucket>.>` subjects, plus a client API with revisions and watch.
 25. **What are accounts for?** Full subject-namespace isolation: multi-tenancy without separate clusters.
 

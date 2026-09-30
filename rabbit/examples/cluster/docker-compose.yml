@@ -21,30 +21,34 @@ services:
     <<: *rabbit-common
     hostname: rabbit-1
     container_name: rabbit-1
+    # AMQP, management, Prometheus, stream; порт stream на хосте у каждого узла свой: 5552/5553/5554
     ports: ["5672:5672", "15672:15672", "15692:15692", "5552:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-1.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit1-data:/var/lib/rabbitmq
 
   rabbit-2:
     <<: *rabbit-common
     hostname: rabbit-2
     container_name: rabbit-2
-    ports: ["5673:5672", "15673:15672"]
+    ports: ["5673:5672", "15673:15672", "5553:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-2.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit2-data:/var/lib/rabbitmq
 
   rabbit-3:
     <<: *rabbit-common
     hostname: rabbit-3
     container_name: rabbit-3
-    ports: ["5674:5672", "15674:15672"]
+    ports: ["5674:5672", "15674:15672", "5554:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-3.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit3-data:/var/lib/rabbitmq
 
 volumes:

@@ -34,7 +34,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer nc.Drain()
+	// every publish below waits for its PubAck, so there is nothing left to
+	// flush at exit and Close is enough
+	defer nc.Close()
 
 	js, err := jetstream.New(nc)
 	if err != nil {

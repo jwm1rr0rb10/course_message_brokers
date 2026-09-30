@@ -98,9 +98,9 @@
 - с 4.0 **удалены classic mirrored queues**: реплицированные очереди — это quorum queues и streams;
 - с 4.3 метаданные кластера хранит только **Khepri** (на Raft), Mnesia и стратегии обработки partition удалены;
 - с 4.3 по умолчанию **запрещены** неустаревающие (non-durable) неэксклюзивные очереди и `global` prefetch;
-- минимальная версия Erlang для 4.3 — 27.
+- минимальная версия Erlang — 27 начиная с 4.3.3 (и 4.2.9); 4.3.0–4.3.2 ещё работали на Erlang 26.2.
 
-**Запускаемые примеры:** кластер, смок-тест команд, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI каждую неделю прогоняет их на 4.3 и на свежем образе RabbitMQ, так что если новая версия изменит описанное здесь поведение, сборка покраснеет.
+**Запускаемые примеры:** кластер, смок-тест команд, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI ([`.github/workflows/examples.yml`](../.github/workflows/examples.yml)) прогоняет их при каждом push и раз в неделю: `go vet` и unit-тесты, затем смок-тест и интеграционные тесты на кластере из трёх узлов — на образе `rabbitmq:4.3-management` и на самом свежем образе RabbitMQ. Если новая версия изменит описанное здесь поведение, сборка покраснеет.
 
 ---
 
@@ -496,8 +496,19 @@ cluster_formation.classic_config.nodes.1 = rabbit@rabbit-1
 cluster_formation.classic_config.nodes.2 = rabbit@rabbit-2
 cluster_formation.classic_config.nodes.3 = rabbit@rabbit-3
 
-# метрики для Prometheus на порту 15692
+# Prometheus (порт 15692): /metrics отдаёт агрегированные метрики, это значение по умолчанию;
+# метрики по каждой очереди — на /metrics/per-object и /metrics/detailed (модуль 16.1)
 prometheus.return_per_object_metrics = false
+
+# stream-протокол (модуль 10.4): сообщать клиентам localhost, а не имя контейнера
+stream.advertised_host = localhost
+```
+
+Порт stream-протокола на хосте у каждого узла свой (5552, 5553, 5554), и узел должен сообщать клиентам именно его:
+
+```bash
+mkdir stream
+for i in 1 2 3; do echo "stream.advertised_port = $((5551 + i))" > stream/rabbit-$i.conf; done
 ```
 
 `enabled_plugins`:
@@ -535,26 +546,29 @@ services:
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-1.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit1-data:/var/lib/rabbitmq
 
   rabbit-2:
     <<: *rabbit-common
     hostname: rabbit-2
     container_name: rabbit-2
-    ports: ["5673:5672", "15673:15672"]
+    ports: ["5673:5672", "15673:15672", "5553:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-2.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit2-data:/var/lib/rabbitmq
 
   rabbit-3:
     <<: *rabbit-common
     hostname: rabbit-3
     container_name: rabbit-3
-    ports: ["5674:5672", "15674:15672"]
+    ports: ["5674:5672", "15674:15672", "5554:5552"]
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./stream/rabbit-3.conf:/etc/rabbitmq/conf.d/20-stream.conf:ro
       - rabbit3-data:/var/lib/rabbitmq
 
 volumes:
@@ -582,7 +596,7 @@ docker exec rabbit-1 rabbitmqctl list_feature_flags name state
 
 В `cluster_status` ты увидишь три узла в разделе *Disk Nodes* и все три в *Running Nodes*. Если узел не вошёл в кластер — смотри логи: `docker logs rabbit-2`.
 
-Management UI доступен на любом узле: http://localhost:15672, http://localhost:15673, http://localhost:15674.
+Management UI доступен на любом узле: http://localhost:15672, http://localhost:15673, http://localhost:15674. Stream-протокол — на `localhost:5552`, `5553` и `5554`.
 
 ## 2.4 Первая очередь и первое сообщение
 
@@ -778,7 +792,7 @@ stock.reserved
 - слова от общего к частному: `order.created`, а не `created.order`;
 - одна сущность — один префикс: `order.#` ловит весь жизненный цикл;
 - не клади в ключ идентификаторы: миллионы уникальных ключей не нужны, маршрутизация идёт по шаблонам;
-- `#` в binding используют в конце шаблона, в 4.3 число `#` в одном binding key ограничено двумя.
+- `#` в binding используют в конце шаблона, с 4.3.5 число `#` в одном binding key ограничено двумя.
 
 ## 3.4 Пример топологии интернет-магазина
 
@@ -906,7 +920,7 @@ curl -s $AUTH -X POST $API/bindings/%2F/e/shop.events/e/billing.in -d '{"routing
 
 ## 4.2 Classic queues
 
-Classic queue хранит сообщения на одном узле: в памяти, с выгрузкой на диск (с 4.2 используется только вторая версия хранилища, CQv2; в 4.3 первая удалена вместе с аргументом `x-queue-mode`).
+Classic queue хранит сообщения на одном узле: в памяти, с выгрузкой на диск (с 4.0 используется только вторая версия хранилища, CQv2: первая, CQv1, удалена, остался лишь код миграции; `x-queue-mode=lazy` ничего не делает с 3.12, а с 4.3 объявление очереди с `x-queue-mode` или `x-queue-version=1` завершается ошибкой).
 
 Что важно знать:
 
@@ -937,9 +951,9 @@ Quorum queue — реплицированная очередь на проток
 | Возможность | Что даёт |
 |---|---|
 | `delivery-limit` | После N неудачных доставок сообщение уходит в DLX или удаляется. С 4.0 по умолчанию **20** — защита от бесконечного цикла «ядовитых» сообщений |
-| Заголовок `x-delivery-count` | Сколько раз сообщение уже доставлялось |
+| Заголовок `x-delivery-count` | Сколько раз доставка не удалась (`reject`, обрыв соединения). С 4.3 `nack` его не увеличивает; все выдачи консьюмерам считает `x-acquired-count` |
 | At-least-once dead lettering | Надёжная пересылка в DLX без потерь (модуль 8) |
-| Приоритеты | С 4.3 — строгие приоритеты с корректным порядком повторной доставки |
+| Приоритеты | С 4.3 — строгие, 32 уровня (0–31), с корректным порядком повторной доставки; в 4.0–4.2 было только два уровня: обычный (0–4) и высокий (5+) |
 | Delayed retry (4.3) | Возвращённое сообщение ждёт перед повторной доставкой, задержка растёт с числом попыток (модуль 8) |
 | Consumer timeout (4.3) | Сообщения, которые консьюмер держит без ack слишком долго, возвращаются в очередь |
 
@@ -1086,7 +1100,7 @@ producer                          broker
 | Classic durable + persistent | Сообщение записано на диск (или доставлено и подтверждено консьюмером) |
 | Нет подходящей очереди | Сразу (и `basic.return` перед ним, если `mandatory=true`) |
 
-`nack` приходит, если брокер не смог принять сообщение: например, очередь с `x-overflow=reject-publish` переполнена или реплики quorum-очереди недоступны.
+`nack` приходит, если брокер не смог принять сообщение: например, очередь с `x-overflow=reject-publish` переполнена. Если у quorum-очереди нет кворума реплик, чаще всего не приходит ни `ack`, ни `nack`: подтверждение ждёт выбора лидера (иногда брокер отвечает `nack`). Поэтому ожидание confirm всегда ограничивай таймаутом.
 
 **Главное правило:** считай сообщение отправленным только после `ack`. Если пришёл `nack` или истёк таймаут ожидания — повтори отправку (с тем же `message_id`) или сохрани сообщение в outbox (модуль 7).
 
@@ -1208,7 +1222,7 @@ func main() {
 }
 ```
 
-Для высокой пропускной способности публикуй пачку сообщений, собирая `DeferredConfirmation`, а потом жди их все. Возвраты приходят асинхронно и раньше ack, поэтому в продакшене их читают в отдельной горутине.
+Для высокой пропускной способности публикуй пачку сообщений, собирая `DeferredConfirmation`, а потом жди их все. Возвраты приходят асинхронно и раньше ack, поэтому в продакшене их читают в отдельной горутине. Пример с пачкой и повторной отправкой неподтверждённых сообщений после обрыва соединения — [`examples/go/cmd/publisher`](examples/go/cmd/publisher/main.go).
 
 ## 5.7 Publisher на Java
 
@@ -1343,13 +1357,13 @@ memory_high_watermark превышен (или свободного диска �
 | Ответ | Эффект | Когда |
 |---|---|---|
 | `basic.ack` | Обработано, удалить | Успех |
-| `basic.nack(requeue=true)` | Вернуть в очередь | Временная ошибка — но осторожно, см. ниже |
+| `basic.reject(requeue=true)` / `basic.nack(requeue=true)` | Вернуть в очередь | Временная ошибка — но осторожно, см. ниже |
 | `basic.nack(requeue=false)` / `basic.reject(requeue=false)` | Отбросить или отправить в DLX | Сообщение невалидно |
 | ничего, консьюмер упал | Все его unacked-сообщения вернутся в очередь | |
 
 Флаг `multiple=true` подтверждает сразу все сообщения до указанного `delivery_tag` — удобно для пачек.
 
-**Ловушка `requeue=true`:** сообщение возвращается **в начало очереди** и тут же доставляется снова. «Ядовитое» сообщение, которое всегда падает, превращается в бесконечный цикл, съедающий CPU. В quorum queues от этого защищает `delivery-limit` (по умолчанию 20): после лимита сообщение уходит в DLX или удаляется. Правильные ретраи с задержкой — в модуле 8.
+**Ловушка `requeue=true`:** сообщение возвращается **в начало очереди** и тут же доставляется снова. «Ядовитое» сообщение, которое всегда падает, превращается в бесконечный цикл, съедающий CPU. В quorum queues от этого защищает `delivery-limit` (по умолчанию 20): после лимита сообщение уходит в DLX или удаляется. Но с 4.3 лимит считает только **неудачные** доставки: `basic.reject(requeue=true)` и обрыв соединения увеличивают `x-delivery-count`, а `basic.nack(requeue=true)` — нет, и такой цикл может крутиться бесконечно. Поэтому временную ошибку обрабатывай через `reject(requeue=true)`. Правильные ретраи с задержкой — в модуле 8.
 
 **Важно:** `delivery_tag` уникален **внутри канала**. Подтверждать сообщение нужно в том же канале, в котором оно получено. Если канал закрылся, ack по старому тегу уже невозможен, а сообщение будет доставлено снова.
 
@@ -1395,7 +1409,7 @@ def on_message(ch, method, props, body):
     except json.JSONDecodeError:
         ch.basic_reject(method.delivery_tag, requeue=False)   # мусор: в DLX
     except TemporaryError:
-        ch.basic_nack(method.delivery_tag, requeue=True)      # попробовать снова (delivery-limit защитит)
+        ch.basic_reject(method.delivery_tag, requeue=True)    # попробовать снова (reject учитывается в delivery-limit)
 
 ch.basic_consume("payments", on_message)
 try:
@@ -1435,7 +1449,7 @@ for d := range msgs { // канал закроется, если закроет�
 	count, _ := d.Headers["x-delivery-count"].(int64)
 	if err := process(d.Body); err != nil {
 		if isTemporary(err) {
-			d.Nack(false, true) // вернуть в очередь
+			d.Reject(true) // вернуть в очередь; в отличие от Nack, учитывается в delivery-limit
 		} else {
 			d.Reject(false) // в DLX
 		}
@@ -1447,7 +1461,7 @@ for d := range msgs { // канал закроется, если закроет�
 log.Println("канал доставки закрыт: нужно переподключиться")
 ```
 
-`amqp091-go` **не переподключается сам**. Когда соединение рвётся, канал `msgs` закрывается; приложение должно подписаться на `conn.NotifyClose` и заново открыть соединение, канал и подписку.
+`amqp091-go` **по умолчанию не переподключается сам**. Когда соединение рвётся, канал `msgs` закрывается; приложение должно подписаться на `conn.NotifyClose` и `ch.NotifyCancel` (брокер отменяет подписку, если очередь удалили или её узел ушёл), подождать с экспоненциально растущей паузой и заново открыть соединение и канал, объявить топологию и подписаться. Полный пример с таким циклом и корректной остановкой по SIGTERM (`ch.Cancel`, доработать и подтвердить уже полученные сообщения, закрыть канал) — в [`examples/go/cmd/consumer`](examples/go/cmd/consumer/main.go). С версии v1.12 в библиотеке есть и встроенное восстановление, которое включается явно: `amqp.DialConfig(url, amqp.Config{Recovery: &amqp.Recovery{}})`. Оно восстанавливает соединение, каналы, топологию и подписки, но publisher confirms, не полученные до обрыва, завершаются как не подтверждённые: такие сообщения всё равно нужно отправить заново.
 
 ## 6.7 Consumer на Java
 
@@ -1470,7 +1484,7 @@ ch.basicConsume("payments", false, "billing-1", new DefaultConsumer(ch) {
         } catch (InvalidMessageException e) {
             getChannel().basicReject(deliveryTag, false);     // в DLX
         } catch (Exception e) {
-            getChannel().basicNack(deliveryTag, false, true); // вернуть в очередь
+            getChannel().basicReject(deliveryTag, true);      // вернуть в очередь (учитывается в delivery-limit)
         }
     }
 });
@@ -1505,7 +1519,7 @@ ch.basicConsume("payments", false, "billing-1", new DefaultConsumer(ch) {
 ### Вопросы для самопроверки
 
 1. Почему auto ack — это at-most-once?
-2. Чем опасен `nack(requeue=true)` для «ядовитого» сообщения, и что от этого защищает в quorum queues?
+2. Чем опасен `requeue=true` для «ядовитого» сообщения, что от этого защищает в quorum queues и почему в 4.3 важно, `reject` это или `nack`?
 3. Как выбрать prefetch для медленной и для быстрой обработки?
 4. Как сохранить порядок обработки, если консьюмеров несколько?
 5. Почему `delivery_tag` нельзя подтвердить в другом канале?
@@ -1673,7 +1687,7 @@ curl -s $AUTH -X PUT $API/exchanges/%2F/shop.dlx -d '{"type":"topic","durable":t
 curl -s $AUTH -X PUT $API/queues/%2F/shop.dead -d '{"durable":true,"arguments":{"x-queue-type":"quorum"}}'
 curl -s $AUTH -X POST $API/bindings/%2F/e/shop.dlx/q/shop.dead -d '{"routing_key":"#"}'
 
-# политика: все очереди shop.* отправляют мёртвые сообщения в shop.dlx
+# политика: очереди payments, stock и notifications отправляют мёртвые сообщения в shop.dlx
 docker exec rabbit-1 rabbitmqctl set_policy shop-dlx '^(payments|stock|notifications)$' \
   '{"dead-letter-exchange":"shop.dlx","delivery-limit":5}' --apply-to queues
 ```
@@ -1713,10 +1727,10 @@ docker exec rabbit-1 rabbitmqctl set_policy payments-dlx '^payments$' \
 | Где | Как | Особенность |
 |---|---|---|
 | TTL сообщений очереди | `x-message-ttl` или политика `message-ttl` | Все сообщения очереди живут не дольше N мс |
-| TTL отдельного сообщения | свойство `expiration` (строка, мс) | **В classic-очередях истекает только в голове очереди** |
+| TTL отдельного сообщения | свойство `expiration` (строка, мс) | **Истекает, только дойдя до головы очереди** |
 | TTL очереди | `x-expires` или политика `expires` | Удалить неиспользуемую очередь |
 
-**Ловушка TTL отдельного сообщения.** Classic-очередь проверяет истечение только у сообщения в голове. Если впереди стоит сообщение с TTL час, а за ним — с TTL секунда, второе будет ждать час. Поэтому для очередей задержки используй **TTL на очередь**, а не на сообщение.
+**Ловушка TTL отдельного сообщения.** Очередь (и classic, и quorum) проверяет истечение только у сообщения в голове. Если впереди стоит сообщение с TTL час, а за ним — с TTL секунда, второе будет ждать час. Поэтому для очередей задержки используй **TTL на очередь**, а не на сообщение.
 
 ## 8.6 Ретраи с задержкой через TTL + DLX
 
@@ -1781,19 +1795,19 @@ docker exec rabbit-1 rabbitmqctl set_policy payments-retry '^payments$' \
     "delivery-limit":10,"dead-letter-exchange":"shop.dlx"}' --apply-to queues
 ```
 
-- `delayed-retry-type`: `disabled`, `all`, `failed` или `returned` — какие возвраты задерживать;
+- `delayed-retry-type`: `disabled`, `all`, `failed` или `returned` — какие возвраты задерживать: `failed` — с увеличенным `delivery-count` (`reject`, обрыв соединения), `returned` — без него (`nack`);
 - в сочетании с `delivery-limit` и DLX получается полноценная схема «ретраи с растущей задержкой, потом DLQ» средствами одной очереди;
-- работает, только когда все узлы кластера на 4.3; точные единицы и допустимые значения сверь с документацией своей версии.
+- задержки — в миллисекундах; то же задаётся аргументами очереди `x-delayed-retry-type`, `x-delayed-retry-min`, `x-delayed-retry-max`; включай, когда все узлы кластера уже на 4.3.
 
 ## 8.8 Плагин delayed message exchange
 
-Сторонний плагин `rabbitmq_delayed_message_exchange` добавляет тип exchange `x-delayed-message`: сообщение с заголовком `x-delay` доставляется через заданное время. Удобен для «отправить через час», но:
+Плагин `rabbitmq_delayed_message_exchange` добавлял тип exchange `x-delayed-message`: сообщение с заголовком `x-delay` доставлялось через заданное время. **С 4.3 он не работает**: плагин хранил отложенные сообщения в Mnesia, которую в 4.3 удалили, а команда RabbitMQ его больше не поддерживает (последний релиз — для 4.2). И на старых версиях у него были ограничения:
 
 - отложенные сообщения хранятся **на одном узле и не реплицируются**;
 - плохо масштабируется на миллионы отложенных сообщений;
 - это отдельный плагин, который нужно ставить и обновлять самому.
 
-Для ретраев предпочитай delayed retry в quorum queues или TTL + DLX. Для длинных отложенных задач (дни) часто проще хранить расписание в базе.
+Для ретраев используй delayed retry в quorum queues (8.7) или TTL + DLX (8.6). Для длинных отложенных задач (дни) часто проще хранить расписание в базе.
 
 ## 8.9 Poison messages и parking lot
 
@@ -1808,7 +1822,7 @@ docker exec rabbit-1 rabbitmqctl set_policy payments-retry '^payments$' \
 
 1. Настрой DLX для очереди `payments`, отправь сообщение и сделай `reject(requeue=false)`. Посмотри заголовки `x-death` в `shop.dead`.
 2. Собери ретрай через TTL + DLX с задержкой 10 секунд и убедись, что сообщение возвращается не раньше.
-3. Отправь сообщение, которое всегда падает, в quorum-очередь с `delivery-limit=3` и `nack(requeue=true)`. Сколько раз его доставят, и где оно окажется?
+3. Отправь сообщение, которое всегда падает, в quorum-очередь с `delivery-limit=3` и `reject(requeue=true)`. Сколько раз его доставят, и где оно окажется? Что изменится, если вместо `reject` делать `nack(requeue=true)`?
 
 ---
 
@@ -1895,7 +1909,7 @@ docker exec rabbit-1 rabbitmq-queues check_if_node_is_quorum_critical
 ## 9.7 Как клиенты переживают падение узла
 
 - Указывай клиенту **несколько адресов** узлов или адрес балансировщика (TCP load balancer перед узлами).
-- Клиент должен **переподключаться** и заново объявлять каналы и подписки. Java-клиент делает это сам (`automatic recovery`), Go и Python — нет, это нужно реализовать.
+- Клиент должен **переподключаться** и заново объявлять каналы и подписки. Java-клиент делает это сам (`automatic recovery`), `amqp091-go` — только если включить `Config.Recovery` (с v1.12), pika — нет: это нужно реализовать (пример — [`examples/go/cmd/consumer`](examples/go/cmd/consumer/main.go)).
 - После переподключения неподтверждённые сообщения будут доставлены снова: ещё одна причина для идемпотентности.
 - Publisher confirms, не полученные до разрыва, считаются неизвестными: сообщения нужно отправить повторно.
 
@@ -1961,16 +1975,17 @@ curl -s -u admin:admin -X PUT http://localhost:15672/api/queues/%2F/shop.events.
 Streams можно читать обычными AMQP-клиентами:
 
 ```python
+def on_message(ch, method, props, body):
+    offset = props.headers.get("x-stream-offset")   # позиция сообщения в stream
+    handle(body)
+    ch.basic_ack(method.delivery_tag)               # ack нужен для flow control, сообщение не удаляется
+
 ch.basic_qos(prefetch_count=500)                   # обязателен для streams
 ch.basic_consume(
     "shop.events.log", on_message,
     arguments={"x-stream-offset": "first"},        # first | last | next | <число> | <timestamp>
 )
-
-def on_message(ch, method, props, body):
-    offset = props.headers.get("x-stream-offset")   # позиция сообщения в stream
-    handle(body)
-    ch.basic_ack(method.delivery_tag)               # ack нужен для flow control, сообщение не удаляется
+ch.start_consuming()
 ```
 
 Через AMQP 0-9-1 брокер **не хранит позицию читателя**: при перезапуске консьюмер сам решает, откуда читать. Сохраняй последний обработанный offset (в базе рядом с результатом) и подписывайся с `x-stream-offset: <сохранённый + 1>`.
@@ -1978,6 +1993,8 @@ def on_message(ch, method, props, body):
 ## 10.4 Stream-протокол
 
 Для высокой пропускной способности у streams есть отдельный бинарный протокол (порт **5552**, плагин `rabbitmq_stream`) и отдельные клиенты: Java, Go, .NET, Python, Rust.
+
+Stream-клиент подключается к любому узлу, узнаёт у него адреса лидера и реплик и дальше подключается к ним напрямую. Поэтому узел должен сообщать адрес, доступный клиенту: по умолчанию это имя хоста (`rabbit-2`), которое с машины разработчика не резолвится. В кластере из модуля 2.3 для этого заданы `stream.advertised_host = localhost` и у каждого узла свой `stream.advertised_port` (5552, 5553, 5554). Для клиентов внутри Docker-сети или Kubernetes эти настройки не нужны: там имена узлов резолвятся.
 
 Что он даёт сверх AMQP:
 
@@ -2090,6 +2107,7 @@ client                                              server
 Клиент:
 
 ```python
+import time
 import uuid
 import pika
 
@@ -2107,7 +2125,10 @@ corr_id = str(uuid.uuid4())
 ch.basic_publish("", "rpc.pricing", b'{"sku":"A1","qty":3}',
                  pika.BasicProperties(reply_to="amq.rabbitmq.reply-to", correlation_id=corr_id,
                                       expiration="5000"))   # запрос не нужен через 5 секунд
-conn.process_data_events(time_limit=5)                        # ждём ответ не дольше 5 секунд
+deadline = time.monotonic() + 5                               # ждём ответ не дольше 5 секунд
+while corr_id not in response and time.monotonic() < deadline:
+    # может вернуться раньше, обработав любое событие, поэтому крутим цикл до ответа или дедлайна
+    conn.process_data_events(time_limit=max(0, deadline - time.monotonic()))
 print(response.get(corr_id, "таймаут"))
 ```
 
@@ -2149,7 +2170,7 @@ ch.basic_publish("", "reports", body, pika.BasicProperties(priority=5, delivery_
 
 - Сообщения с более высоким `priority` доставляются раньше.
 - Приоритет работает, только когда в очереди **есть очередь**: если консьюмеры разбирают всё мгновенно, сортировать нечего. Маленький prefetch усиливает эффект.
-- Quorum queues поддерживают приоритеты, а с 4.3 — строгие приоритеты с корректным порядком повторной доставки.
+- Quorum queues поддерживают приоритеты без `x-max-priority`. С 4.3 — строгие, 32 уровня (0–31), сообщение без `priority` считается приоритетом 4; в 4.0–4.2 уровней было только два: обычный (0–4) и высокий (5 и выше). Возвращённые в очередь сообщения доставляются в порядке возврата, без учёта приоритета.
 - Не делай десятки уровней: 2–5 хватает почти всегда.
 
 ## 11.5 Competing consumers и порядок
@@ -2328,7 +2349,7 @@ docker exec rabbit-1 rabbitmqctl shovel_status
 - переотправка сообщений из DLQ обратно в рабочую очередь после исправления бага;
 - односторонняя доставка данных в другой регион или в изолированный контур.
 
-С 4.3.5 у динамических shovel появился параметр `src-delete-after-duration`: shovel сам удаляется через заданное время, удобно для разовых переносов.
+С 4.3.5 у динамических shovel появился параметр `src-delete-after-duration`: shovel сам удаляется через заданное время (в секундах, по умолчанию не меньше 60), удобно для разовых переносов.
 
 ## 13.4 Federation или Shovel
 
@@ -2397,7 +2418,7 @@ docker exec rabbit-1 rabbitmqctl set_user_limits billing '{"max-connections": 20
 
 Лимиты защищают кластер от одного приложения с утечкой соединений или бесконечным созданием очередей — типичной причины аварий.
 
-В `rabbitmq.conf` есть и общие лимиты узла: `max_connections` и `max_channels` (так они называются с 4.2.7/4.3.1; старые имена `connection_max` и `channel_max` работают как синонимы).
+В `rabbitmq.conf` есть и общие лимиты узла: `max_connections` (соединений на узел, по умолчанию без ограничения) и `channel_max_per_node` (каналов на узел). Не путай их с `max_channels_per_connection`: это максимум каналов в одном соединении, который согласуется с клиентом при подключении (по умолчанию 2047). Ключи `max_connections` и `max_channels_per_connection` так называются с 4.2.7/4.3.1; старые имена `connection_max` и `channel_max` работают как синонимы.
 
 ## 14.3 Аларм памяти
 
@@ -2590,6 +2611,8 @@ Management UI удобен для разбора ситуации, но не з�
 | `rabbitmq_global_messages_redelivered_total` | Повторные доставки |
 | `rabbitmq_global_messages_confirmed_total` | Подтверждённые публикации |
 
+Метрики `rabbitmq_queue_*` на `/metrics` при `prometheus.return_per_object_metrics = false` (значение по умолчанию, как в кластере курса) — это **суммы по узлу, без метки `queue`**. Для графиков и алертов по отдельным очередям собирай `/metrics/detailed?family=queue_coarse_metrics&family=queue_consumer_count`: там те же значения по каждой очереди называются `rabbitmq_detailed_queue_messages_ready`, `rabbitmq_detailed_queue_messages_unacked`, `rabbitmq_detailed_queue_messages` и `rabbitmq_detailed_queue_consumers`. `/metrics/per-object` тоже даёт метку `queue`, но на тысячах очередей обходится дорого.
+
 ## 16.3 Проверки здоровья
 
 ```bash
@@ -2618,6 +2641,36 @@ docker exec rabbit-1 rabbitmq-queues check_if_node_is_quorum_critical
 | **Рост соединений или каналов** | Резкий | Утечка соединений в приложении |
 | **Свободное место** | < 20% | Скоро аларм диска |
 | **Ошибки аутентификации** | Рост | Атака или сломанный деплой |
+
+Алерты по очередям строятся на метриках из `/metrics/detailed` (см. 16.2), алармы и счётчики узла — на обычном `/metrics`. Так это выглядит в Prometheus для конфигурации кластера из модуля 2.3:
+
+```yaml
+# prometheus.yml: агрегированные метрики узла + метрики по очередям
+scrape_configs:
+  - job_name: rabbitmq
+    static_configs: [{targets: ["rabbit-1:15692", "rabbit-2:15692", "rabbit-3:15692"]}]
+  - job_name: rabbitmq-queues
+    metrics_path: /metrics/detailed
+    params: {family: [queue_coarse_metrics, queue_consumer_count]}
+    static_configs: [{targets: ["rabbit-1:15692", "rabbit-2:15692", "rabbit-3:15692"]}]
+
+# rules.yml
+groups:
+  - name: rabbitmq
+    rules:
+      - alert: RabbitMQAlarm             # аларм памяти или диска
+        expr: max(rabbitmq_alarms_memory_used_watermark) == 1 or max(rabbitmq_alarms_free_disk_space_watermark) == 1
+      - alert: QueueWithoutConsumers     # очередь без консьюмеров
+        expr: rabbitmq_detailed_queue_consumers == 0 and on(vhost, queue) rabbitmq_detailed_queue_messages_ready > 0
+        for: 5m
+      - alert: QueueGrowing              # очередь растёт 10+ минут
+        expr: deriv(rabbitmq_detailed_queue_messages_ready[10m]) > 0
+        for: 10m
+      - alert: MessagesInDLQ             # сообщения в DLQ (shop.dead и т. п.)
+        expr: rabbitmq_detailed_queue_messages{queue=~".*\\.dead"} > 0
+      - alert: UnroutableDropped         # сообщения теряются без маршрута
+        expr: rate(rabbitmq_global_messages_unroutable_dropped_total[5m]) > 0
+```
 
 ## 16.5 Повседневные команды
 
@@ -2852,7 +2905,7 @@ spec:
 
 - **обновляться можно только на следующую серию**: на 4.3 — только с последнего патча 4.2.x, на 4.2 — с 4.1, 4.0 или 3.13;
 - **перед обновлением включи все feature flags**: `rabbitmqctl enable_feature_flag all`, иначе новые узлы не стартуют в кластере;
-- **Erlang**: для 4.3 (и последних патчей 4.2) нужен Erlang 27+. Официальные образы Docker уже содержат подходящий Erlang;
+- **Erlang**: начиная с 4.3.3 и 4.2.9 нужен Erlang 27+. Официальные образы Docker уже содержат подходящий Erlang;
 - **смешанные версии** в кластере допустимы только на время rolling upgrade — несколько часов, не дни.
 
 Rolling upgrade:
@@ -2905,7 +2958,7 @@ docker exec rabbit-1 rabbitmq-queues rebalance quorum
 | Auto ack для важных данных | Потери при падении консьюмера | Manual ack после обработки |
 | Публикация без confirms | Не знаешь, дошло ли сообщение | Publisher confirms |
 | Classic-очереди для важных данных | Нет репликации | Quorum queues |
-| `nack(requeue=true)` на любую ошибку | Бесконечный цикл «ядовитых» сообщений | Delivery-limit, DLX, ретраи с задержкой |
+| `nack(requeue=true)` на любую ошибку | Бесконечный цикл «ядовитых» сообщений (в 4.3 `nack` не учитывается в delivery-limit) | `reject(requeue=true)` + delivery-limit, DLX, ретраи с задержкой |
 | Prefetch без лимита | Память консьюмера и неравномерное распределение | Осмысленный prefetch |
 | Очереди с миллионами сообщений | Память, медленное восстановление | Короткие очереди, лимиты, streams |
 | Очередь на каждый запрос или пользователя | Нагрузка на метаданные кластера | Общие очереди, direct reply-to |
@@ -3289,4 +3342,4 @@ Python — pika (синхронный) или aio-pika (асинхронный);
 
 ⭐ Если курс помог, поставь звезду: так его найдут другие разработчики.
 
-**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.
+**Лицензия:** текст курса распространяется по лицензии [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ru), примеры кода — по [MIT License](../LICENSE). Можно свободно использовать, адаптировать и распространять материалы, в том числе для внутренних воркшопов, с указанием источника.

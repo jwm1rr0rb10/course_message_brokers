@@ -15,6 +15,13 @@ def name(prefix):
     return f"{prefix}.{uuid.uuid4().hex[:8]}"
 
 
+def get_one(ch, queue, what, timeout=5):
+    """Wait for one message; consume() yields (None, None, None) on inactivity_timeout."""
+    method, props, body = next(ch.consume(queue, inactivity_timeout=timeout))
+    assert method is not None, f"{what}: no message in {queue} within {timeout}s"
+    return method, props, body
+
+
 def main():
     conn = pika.BlockingConnection(pika.URLParameters(URL))
     ch = conn.channel()
@@ -40,11 +47,10 @@ def main():
         ch.queue_declare(work, durable=True, arguments={"x-queue-type": "quorum", "x-dead-letter-exchange": dlx})
         cleanup_q += [dead, work]
         ch.basic_publish("", work, b"{not json", pika.BasicProperties(delivery_mode=2))
-        method, props, body = next(ch.consume(work, inactivity_timeout=5))
+        method, props, body = get_one(ch, work, "published message")
         ch.basic_reject(method.delivery_tag, requeue=False)
         ch.cancel()
-        method, props, body = next(ch.consume(dead, inactivity_timeout=5))
-        assert method is not None, "rejected message did not reach the DLX"
+        method, props, body = get_one(ch, dead, "rejected message did not reach the DLX")
         ch.basic_ack(method.delivery_tag)
         ch.cancel()
         reason = (props.headers or {}).get("x-first-death-reason")

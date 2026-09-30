@@ -5,6 +5,7 @@
 package coursetest
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -55,7 +56,9 @@ func TestUnroutableMessages(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	dc, err := ch.PublishWithDeferredConfirm(ex, "nobody", true, false, amqp.Publishing{Body: []byte("returned")})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dc, err := ch.PublishWithDeferredConfirmWithContext(ctx, ex, "nobody", true, false, amqp.Publishing{Body: []byte("returned")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +70,9 @@ func TestUnroutableMessages(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no basic.return for a mandatory unroutable message")
 	}
-	<-dc.Done()
+	if _, err := dc.WaitContext(ctx); err != nil {
+		t.Fatalf("no confirm for the returned message: %v", err)
+	}
 }
 
 // 3.7: an alternate exchange catches messages that match no binding.
@@ -90,7 +95,7 @@ func TestRedeliveryAfterChannelClose(t *testing.T) {
 	q := testutil.Queue(t, c, "course-redeliver", quorum)
 	testutil.Publish(t, testutil.ConfirmCh(t, c), "", q, "job")
 
-	ch, _ := c.Channel()
+	ch := testutil.Ch(t, c)
 	msgs, err := ch.Consume(q, "", false, false, false, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +178,32 @@ func TestExplicitDeliveryLimit(t *testing.T) {
 	}
 	if reason != "delivery_limit" {
 		t.Fatalf("death reason %q, want delivery_limit", reason)
+	}
+}
+
+// 6.3: since 4.3 basic.nack(requeue=true) does not increment x-delivery-count,
+// so it never reaches the delivery limit (basic.reject does).
+func TestNackDoesNotCountTowardDeliveryLimit(t *testing.T) {
+	c := testutil.Dial(t)
+	testutil.RequireVersion(t, c, 4, 3)
+	q := testutil.Queue(t, c, "course-nack", amqp.Table{"x-queue-type": "quorum", "x-delivery-limit": 2})
+	testutil.Publish(t, testutil.ConfirmCh(t, c), "", q, "poison")
+
+	ch := testutil.Ch(t, c)
+	if err := ch.Qos(1, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := ch.Consume(q, "", false, false, false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 6; i++ {
+		select {
+		case d := <-msgs:
+			_ = d.Nack(false, true)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("message gone after %d nacks with delivery-limit 2: nack was counted", i-1)
+		}
 	}
 }
 
@@ -285,7 +316,7 @@ func TestDirectReplyToRPC(t *testing.T) {
 	}
 	go func() {
 		for d := range reqs {
-			_ = server.Publish("", d.ReplyTo, false, false, amqp.Publishing{
+			_ = server.PublishWithContext(context.Background(), "", d.ReplyTo, false, false, amqp.Publishing{
 				CorrelationId: d.CorrelationId, Body: []byte(strings.ToUpper(string(d.Body)))})
 			_ = d.Ack(false)
 		}
@@ -296,7 +327,7 @@ func TestDirectReplyToRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Publish("", q, false, false, amqp.Publishing{
+	if err := client.PublishWithContext(context.Background(), "", q, false, false, amqp.Publishing{
 		ReplyTo: "amq.rabbitmq.reply-to", CorrelationId: "42", Expiration: "5000", Body: []byte("ping")}); err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +383,7 @@ func requeueUntilDeadLettered(t *testing.T, c *amqp.Connection, extra amqp.Table
 		select {
 		case d := <-msgs:
 			deliveries++
-			_ = d.Nack(false, true) // always "fails" and requeues
+			_ = d.Reject(true) // always "fails" and requeues; since 4.3 only reject counts toward the limit
 		case <-time.After(3 * time.Second):
 			got := testutil.Collect(t, c, dead, 1, 5*time.Second, true, nil)
 			if len(got) != 1 {

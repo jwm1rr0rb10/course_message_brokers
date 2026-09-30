@@ -21,7 +21,7 @@ import (
 func sbClient(t *testing.T) *azservicebus.Client {
 	t.Helper()
 	if !emu.Reachable("localhost:5672") {
-		t.Skip("Service Bus emulator is not running on localhost:5672")
+		emu.Unavailable(t, "Service Bus emulator is not running on localhost:5672")
 	}
 	c, err := azservicebus.NewClientFromConnectionString(emu.ServiceBusConnectionString(), nil)
 	if err != nil {

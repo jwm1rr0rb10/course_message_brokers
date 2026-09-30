@@ -2,13 +2,29 @@
 # Runs the CLI commands from the Kafka course against the three-node Docker
 # cluster (examples/cluster) and checks they behave as the course says.
 #
-# Needs: docker, python3, and the kprobe binary (go build ./cmd/kprobe in examples/go).
+# Needs: docker and the kprobe binary (go build ./cmd/kprobe in examples/go).
 #   KPROBE=path/to/kprobe ./examples/scripts/smoke-test.sh
+# Non-interactive, exits non-zero on the first failed check, works with the
+# bash 3.2 that ships with macOS. Brokers it stops are started again on exit.
 set -euo pipefail
 
-BS="kafka-1:19092"                       # INTERNAL listener, used from inside the containers
 KPROBE="${KPROBE:-kprobe}"
-kt() { docker exec -i kafka-1 /opt/kafka/bin/"$@"; }
+NODE="kafka-1"                           # container the CLI tools run in; switched when it is stopped
+BS="$NODE:19092"                         # its INTERNAL listener, used from inside the containers
+use_node_except() { # pick a running node other than $1 for kt/leader_of
+  local n
+  for n in kafka-1 kafka-2 kafka-3; do
+    if [[ "$n" != "$1" ]]; then NODE="$n"; BS="$n:19092"; return 0; fi
+  done
+}
+# kt TOOL ARGS...: run /opt/kafka/bin/TOOL inside $NODE
+kt()  { local tool=$1; shift; docker exec    "$NODE" "/opt/kafka/bin/$tool" "$@" </dev/null; }  # no stdin
+kti() { local tool=$1; shift; docker exec -i "$NODE" "/opt/kafka/bin/$tool" "$@"; }             # reads stdin (producer input)
+restart_all() { # never leave a stopped broker behind, whatever happened
+  local n
+  for n in kafka-1 kafka-2 kafka-3; do docker start "$n" >/dev/null 2>&1 || true; done
+}
+trap restart_all EXIT
 
 PASS=0
 step() { echo; echo "==> $*"; }
@@ -48,7 +64,7 @@ echo "$desc" | grep -q "ReplicationFactor: 3" || fail "orders should have RF 3: 
 echo "$desc" | grep -q "min.insync.replicas=2" || fail "min.insync.replicas not set: $desc"
 ok "orders: 3 partitions, RF 3, min.insync.replicas=2"
 
-docker exec kafka-1 sh -c 'ls /var/lib/kafka/data' | grep -q '^orders-' \
+docker exec "$NODE" sh -c 'ls /var/lib/kafka/data' | grep -q '^orders-' \
   || fail "partition directories are not in /var/lib/kafka/data (check KAFKA_LOG_DIRS)"
 ok "data lives in /var/lib/kafka/data on the volume (module 2.6)"
 
@@ -59,13 +75,13 @@ printf '%s\n' \
   'order-2:{"event":"OrderCreated","order_id":"order-2"}' \
   'order-1:{"event":"OrderPaid","order_id":"order-1"}' \
   'order-1:{"event":"OrderShipped","order_id":"order-1"}' \
-| kt kafka-console-producer.sh --bootstrap-server "$BS" --topic orders \
+| kti kafka-console-producer.sh --bootstrap-server "$BS" --topic orders \
     --property parse.key=true --property key.separator=: >/dev/null
 
 out=$(kt kafka-console-consumer.sh --bootstrap-server "$BS" --topic orders --group billing \
   --from-beginning --max-messages 4 --timeout-ms 30000 \
   --property print.key=true --property print.partition=true 2>/dev/null)
-parts=$(echo "$out" | awk -F'\t' '$2=="order-1" {print $1}' | sort -u | wc -l)
+parts=$(echo "$out" | awk -F'\t' '$2=="order-1" {print $1}' | sort -u | wc -l | tr -d ' ')
 seq_ok=$(echo "$out" | awk -F'\t' '$2=="order-1" {print $3}' | grep -o '"event":"[A-Za-z]*"' | tr '\n' ' ')
 [[ "$parts" == 1 ]] || fail "order-1 events spread over $parts partitions: $out"
 [[ "$seq_ok" == '"event":"OrderCreated" "event":"OrderPaid" "event":"OrderShipped" ' ]] \
@@ -103,7 +119,8 @@ sleep 2
 ok "acks=all with 3/3 replicas in ISR"
 
 victim=kafka-3
-[[ "$(leader_of probe 0)" == 3 ]] && victim=kafka-2
+if [[ "$(leader_of probe 0)" == 3 ]]; then victim=kafka-2; fi
+use_node_except "$victim"
 docker stop "$victim" >/dev/null
 isr_shrunk() { # newer versions print extra columns (Elr, LastKnownElr) after Isr
   local isr
@@ -121,19 +138,23 @@ ok "acks=1 still accepted: min.insync.replicas only applies to acks=all"
 docker start "$victim" >/dev/null
 wait_for 120 no_urp || fail "$victim did not catch up"
 ok "$victim is back in sync"
+use_node_except none
 
 # ---------------------------------------------------------------------------
 step "stop the leader of orders/0: data stays available (module 2.7 practice)"
 old=$(leader_of orders 0)
+[[ "$old" =~ ^[123]$ ]] || fail "unexpected leader of orders/0: '$old'"
+use_node_except "kafka-$old"            # the CLI must not run inside the broker we stop
 docker stop "kafka-$old" >/dev/null
 new_leader() { local l; l=$(leader_of orders 0); [[ -n "$l" && "$l" != "$old" && "$l" != "none" ]]; }
 wait_for 60 new_leader || fail "no new leader for orders/0"
 count=$(kt kafka-console-consumer.sh --bootstrap-server "$BS" --topic orders --from-beginning \
-  --max-messages 4 --timeout-ms 30000 2>/dev/null | wc -l)
+  --max-messages 4 --timeout-ms 30000 2>/dev/null | wc -l | tr -d ' ')
 [[ "$count" == 4 ]] || fail "expected 4 messages after failover, got $count"
 ok "leader moved from $old to $(leader_of orders 0), all 4 messages readable"
 docker start "kafka-$old" >/dev/null
 wait_for 120 no_urp || fail "kafka-$old did not catch up"
+use_node_except none
 
 kt kafka-leader-election.sh --bootstrap-server "$BS" --election-type preferred --all-topic-partitions >/dev/null 2>&1 || true
 ok "kafka-$old rejoined; preferred leader election ran"

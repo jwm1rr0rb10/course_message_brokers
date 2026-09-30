@@ -7,7 +7,6 @@ package coursetest
 import (
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -188,9 +187,7 @@ func TestReadCommittedHidesAbortedTransaction(t *testing.T) {
 
 // 7.3: a compacted topic rejects records without a key.
 func TestCompactedTopicRejectsNullKey(t *testing.T) {
-	if os.Getenv("KAFKA_FAKE") != "" {
-		t.Skip("kfake does not implement this broker-side validation")
-	}
+	testutil.RequireRealBroker(t, "kfake does not implement this broker-side validation")
 	topic := testutil.Topic(t, 1, map[string]*string{"cleanup.policy": kadm.StringPtr("compact")})
 	cl := testutil.Client(t, kgo.DefaultProduceTopic(topic), kgo.RecordRetries(1))
 	err := cl.ProduceSync(testutil.Ctx(t, 30*time.Second), &kgo.Record{Value: []byte("no key")}).FirstErr()

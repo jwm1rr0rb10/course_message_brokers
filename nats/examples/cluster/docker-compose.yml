@@ -1,6 +1,7 @@
 x-nats-common: &nats-common
-  # the course pins 2.12; CI also runs the examples against newer images
-  image: ${NATS_IMAGE:-nats:2.12-alpine}
+  # the course pins 2.15; CI also runs the examples against the newest image:
+  #   NATS_IMAGE=nats:alpine docker compose up -d
+  image: ${NATS_IMAGE:-nats:2.15.0-alpine}
   restart: unless-stopped
 
 services:
@@ -32,7 +33,7 @@ services:
       - nats3-data:/data
 
   nats-box:
-    image: natsio/nats-box:latest
+    image: ${NATS_BOX_IMAGE:-natsio/nats-box:0.20.0}
     container_name: nats-box
     entrypoint: ["sleep", "infinity"]
     depends_on: [nats-1, nats-2, nats-3]

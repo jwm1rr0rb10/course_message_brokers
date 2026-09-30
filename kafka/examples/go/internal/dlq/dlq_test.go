@@ -24,7 +24,7 @@ func TestRecordKeepsDataAndAddsContext(t *testing.T) {
 	for k, want := range map[string]string{
 		"trace-id": "abc", "dlq-original-topic": "shop.orders.events",
 		"dlq-original-partition": "2", "dlq-original-offset": "41",
-		"dlq-error-message": "invalid json", "dlq-attempts": "3", "dlq-consumer-group": "billing",
+		"dlq-error-class": "*errors.errorString", "dlq-error-message": "invalid json", "dlq-attempts": "3", "dlq-consumer-group": "billing",
 	} {
 		if got, ok := Header(d, k); !ok || got != want {
 			t.Errorf("header %s = %q, want %q", k, got, want)

@@ -32,8 +32,13 @@ func TestBuildDLQMessageReplacesMsgID(t *testing.T) {
 	}
 	msg := BuildDLQMessage(Advisory{Stream: "ORDERS", Consumer: "BILLING", StreamSeq: 42, Reason: "bad json"}, orig)
 
-	if got := msg.Header.Get(jetstream.MsgIDHeader); got != "dlq-ORDERS-42" {
-		t.Fatalf("Nats-Msg-Id = %q, want dlq-ORDERS-42", got)
+	if got := msg.Header.Get(jetstream.MsgIDHeader); got != "dlq-ORDERS-BILLING-42" {
+		t.Fatalf("Nats-Msg-Id = %q, want dlq-ORDERS-BILLING-42", got)
+	}
+	// another consumer failing the same message gets its own DLQ entry
+	other := BuildDLQMessage(Advisory{Stream: "ORDERS", Consumer: "SHIPPING", StreamSeq: 42}, orig)
+	if other.Header.Get(jetstream.MsgIDHeader) == msg.Header.Get(jetstream.MsgIDHeader) {
+		t.Fatal("DLQ id must include the consumer")
 	}
 	if got := msg.Header.Get("Trace-Id"); got != "abc" {
 		t.Fatalf("Trace-Id not copied: %q", got)

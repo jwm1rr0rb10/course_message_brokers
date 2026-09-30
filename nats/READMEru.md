@@ -1,12 +1,12 @@
 # NATS курс 2026: бесплатный курс по NATS и JetStream с нуля до профи на русском
 
-![NATS 2.12](https://img.shields.io/badge/NATS-2.12-27AAE1?logo=natsdotio&logoColor=white)
+![NATS 2.15](https://img.shields.io/badge/NATS-2.15-27AAE1?logo=natsdotio&logoColor=white)
 ![JetStream](https://img.shields.io/badge/JetStream-persistence-blue)
 ![Курс на русском](https://img.shields.io/badge/язык-русский-red)
 ![Бесплатный курс](https://img.shields.io/badge/цена-бесплатно-brightgreen)
 ![От junior до senior](https://img.shields.io/badge/уровень-junior%20→%20senior-orange)
 
-> **Полный бесплатный курс по NATS на русском языке.** Теория, практика, Docker, Go, Python и Java, Core NATS и JetStream, subjects и wildcards, queue groups, request-reply, стримы и консьюмеры, гарантии доставки и дедупликация, Key-Value и Object Store, микросервисы, кластеризация, супер-кластеры и leaf nodes, мониторинг, безопасность, тюнинг и production-архитектура. Всё в одном README, актуально для **NATS Server 2.12 (2026)**.
+> **Полный бесплатный курс по NATS на русском языке.** Теория, практика, Docker, Go, Python и Java, Core NATS и JetStream, subjects и wildcards, queue groups, request-reply, стримы и консьюмеры, гарантии доставки и дедупликация, Key-Value и Object Store, микросервисы, кластеризация, супер-кластеры и leaf nodes, мониторинг, безопасность, тюнинг и production-архитектура. Всё в одном README, актуально для **NATS Server 2.15 (2026)**.
 
 **NATS обучение без воды:** каждый модуль состоит из понятной теории, схем, команд, которые можно запустить у себя, типичных ошибок и вопросов для самопроверки. Курс подходит, чтобы выучить NATS с нуля, подготовиться к собеседованию на backend, platform или DevOps-позицию и спроектировать надёжную систему на NATS в продакшене.
 
@@ -76,7 +76,7 @@
 - [Модуль 17. Безопасность NATS: accounts, NKeys, JWT, TLS](#модуль-17-безопасность-nats-accounts-nkeys-jwt-tls)
 - [Модуль 18. NATS в продакшене: архитектура и эксплуатация](#модуль-18-nats-в-продакшене-архитектура-и-эксплуатация)
 - [Модуль 19. Итоговый проект: event-driven интернет-магазин](#модуль-19-итоговый-проект-event-driven-интернет-магазин)
-- [Что нового в NATS 2.11 и 2.12](#что-нового-в-nats-211-и-212)
+- [Что нового в NATS 2.11, 2.12, 2.14 и 2.15](#что-нового-в-nats-211-212-214-и-215)
 - [Шпаргалка NATS CLI](#шпаргалка-nats-cli)
 - [Шпаргалка важных настроек](#шпаргалка-важных-настроек)
 - [Вопросы на собеседовании по NATS с ответами](#вопросы-на-собеседовании-по-nats-с-ответами)
@@ -96,9 +96,9 @@
 
 **Что нужно установить:** Docker и Docker Compose, `nats` CLI (natscli), Git, любую IDE. Для примеров на Go нужен Go 1.26+ (его требует актуальный `nats.go`), для Python нужен Python 3.10+, для Java нужна Java 17+.
 
-**Версия:** все примеры написаны для NATS Server 2.12.x, образ `nats:2.12-alpine`. JetStream включается флагом `-js` и не работает по умолчанию.
+**Версия:** все примеры написаны для NATS Server 2.15.x, образ `nats:2.15-alpine`. JetStream включается флагом `-js` и не работает по умолчанию.
 
-**Запускаемые примеры:** кластер, смок-тест команд CLI, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI каждую неделю прогоняет их на 2.12 и на свежем релизе 2.x, так что если новая версия изменит описанное здесь поведение, сборка покраснеет.
+**Запускаемые примеры:** кластер, смок-тест команд CLI, код на Go и Python и интеграционные тесты утверждений курса лежат в [`examples/`](examples/). CI ([`examples.yml`](../.github/workflows/examples.yml)) при каждом push и раз в неделю прогоняет `go vet`, тесты на Go (включая интеграционные на встроенном `nats-server`) и смок-тест на кластере из docker compose: на закреплённом образе 2.15 и на самом свежем релизе. Если новая версия изменит описанное здесь поведение, сборка покраснеет.
 
 ---
 
@@ -500,7 +500,7 @@ JetStream:
 ## 2.1 Самый быстрый запуск NATS
 
 ```bash
-docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2.15-alpine -js -m 8222
 ```
 
 - `4222` — клиентский порт;
@@ -529,7 +529,7 @@ brew tap nats-io/nats-tools && brew install nats-io/nats-tools/nats
 go install github.com/nats-io/natscli/nats@latest
 
 # Или просто через Docker
-docker run --rm -it --network host natsio/nats-box:latest
+docker run --rm -it --network host natsio/nats-box:0.20.0
 ```
 
 Контексты избавляют от бесконечных флагов:
@@ -592,7 +592,7 @@ port: 4222
 http: 8222
 
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"          # сервер сам добавит каталог jetstream: /data/jetstream
   max_memory_store: 1GB
   max_file_store: 10GB
 }
@@ -631,7 +631,7 @@ no_auth_user: app
 
 ```yaml
 x-nats-common: &nats-common
-  image: nats:2.12-alpine
+  image: nats:2.15-alpine
   restart: unless-stopped
   volumes:
     - ./nats.conf:/etc/nats/nats.conf:ro
@@ -665,7 +665,7 @@ services:
       - nats3-data:/data
 
   nats-box:
-    image: natsio/nats-box:latest
+    image: natsio/nats-box:0.20.0
     container_name: nats-box
     entrypoint: ["sleep", "infinity"]
     depends_on: [nats-1, nats-2, nats-3]
@@ -732,6 +732,8 @@ docker exec nats-1 ls -R /data/jetstream
             │   └── BILLING/
             └── meta.inf     # конфигурация стрима
 ```
+
+Сервер всегда добавляет к `store_dir` подкаталог `jetstream`: при `store_dir: "/data"` данные лежат в `/data/jetstream/`, а при `store_dir: "/data/jetstream"` окажутся в `/data/jetstream/jetstream/`.
 
 Core NATS не хранит **ничего**: остановил сервер — состояние подписок исчезло. Всё, что должно пережить рестарт, живёт в `store_dir`. Монтируй его на persistent volume, иначе после перезапуска пода в Kubernetes стрим будет пустым.
 
@@ -829,7 +831,7 @@ shop.*.created           ✘ токенов больше
 shop.orders.eu           ✘ токенов меньше
 ```
 
-Wildcards работают **только в подписке и в конфигурации стрима**. Публиковать в wildcard нельзя: `nats pub shop.orders.* ...` отправит сообщение в subject, буквально содержащий звёздочку, и никто его не получит.
+Wildcards работают **только в подписке и в конфигурации стрима**. Публиковать в wildcard нельзя: `nats pub shop.orders.* ...` не разошлёт сообщение по всем подходящим subjects, а отправит его в subject, буквально содержащий звёздочку. Сервер (вне pedantic-режима) такое не отклоняет: подписчик `shop.orders.created` сообщение не получит, а подписки `shop.orders.*` и `shop.orders.>` получат, и стрим на `shop.orders.>` его сохранит. Проверяй subject перед публикацией.
 
 ## 3.3 Проектирование subject-пространства
 
@@ -979,7 +981,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sub.SetPendingLimits(65536, 64*1024*1024) // защита от slow consumer
+	// буфер клиента (по умолчанию 500 000 сообщений / 64 МБ): при переполнении
+	// сообщения отбрасываются и приходит ошибка slow consumer
+	sub.SetPendingLimits(1_000_000, 256*1024*1024)
 
 	// публикация с заголовками
 	msg := nats.NewMsg("shop.orders.created")
@@ -1194,7 +1198,7 @@ for time.Now().Before(deadline) {
 
 1. Запусти 3 воркера в одной queue group, отправь 100 сообщений и посчитай распределение.
 2. Убей один воркер во время обработки: убедись, что сообщение потеряно.
-3. Сделай сервис request-reply и измерь задержку: `nats bench --request --msgs 10000 service.echo`.
+3. Сделай сервис request-reply и измерь задержку: `nats bench service request service.echo --msgs 10000`.
 4. Воспроизведи ошибку `no responders`.
 
 ---
@@ -1275,8 +1279,7 @@ nats stream add ORDERS \
   --max-msg-size 1MB \
   --dupe-window 2m \
   --allow-rollup \
-  --deny-delete \
-  --no-allow-purge=false
+  --deny-delete
 ```
 
 | Параметр | Смысл | Практика |
@@ -1489,15 +1492,15 @@ Stream ORDERS
 
 ## 6.2 Pull vs Push
 
-| | **Pull (рекомендуется)** | **Push (legacy)** |
+| | **Pull (рекомендуется)** | **Push** |
 |---|---|---|
 | Кто инициирует | Клиент запрашивает N сообщений | Сервер сам шлёт в subject |
 | Flow control | Естественный: не просишь — не получаешь | Нужны `flow_control` и `idle_heartbeat` |
 | Масштабирование | Просто добавь ещё экземпляр, они делят один консьюмер | Нужна queue group и `deliver_group` |
-| Отказоустойчивость | Клиент упал — ничего не теряется | Сообщения летят в никуда |
-| Когда использовать | Практически всегда | Legacy-код, специфичные сценарии |
+| Отказоустойчивость | Клиент упал — неподтверждённое доставят заново через `AckWait` | То же при `AckExplicit`; теряется только отправленное упавшему клиенту при `ack none` (как и у pull) |
+| Когда использовать | Практически всегда | Нужна доставка сервером в subject, существующий код на push |
 
-**Pull-консьюмеры — рекомендуемый вариант по умолчанию**, и современные клиентские API (пакеты `jetstream`) построены вокруг них. Все примеры ниже на них.
+**Pull-консьюмеры — рекомендуемый вариант по умолчанию**, и современные клиентские API (пакеты `jetstream`) построены вокруг них. Push не устарел (в `nats.go/jetstream` есть `CreatePushConsumer`), просто нужен реже. Все примеры ниже на pull.
 
 ## 6.3 Ack policy и что означает каждый ответ
 
@@ -1532,8 +1535,8 @@ nats consumer add ORDERS BILLING \
   --max-pending 1000 \
   --backoff linear \
   --backoff-steps 5 \
-  --backoff-min 1s \
-  --backoff-max 1m \
+  --backoff-min 30s \
+  --backoff-max 5m \
   --replicas 3 \
   --defaults
 ```
@@ -1545,18 +1548,19 @@ nats consumer add ORDERS BILLING \
 | `ack_wait` | 30s | Сколько сервер ждёт ack перед повторной доставкой |
 | `max_deliver` | -1 (бесконечно) | Сколько раз пытаться доставить |
 | `max_ack_pending` | 1000 | Сколько неподтверждённых сообщений можно выдать: это **и есть** ограничитель параллелизма |
-| `backoff` | нет | Массив задержек для повторных доставок |
+| `backoff` | нет | Массив задержек повторной доставки по истечении ack wait; заменяет `ack_wait` |
 | `replicas` | как у стрима | Реплики состояния консьюмера |
 | `inactive_threshold` | 5s (ephemeral) | Когда удалить неиспользуемого консьюмера |
 
 **`max_ack_pending` — самый недооценённый параметр.** Он же защита от перегрузки: если воркеры не успевают, сервер перестаёт выдавать новые сообщения.
 
-**Два правила backoff, на которых часто спотыкаются:**
+**Три правила backoff, на которых часто спотыкаются:**
 
-- если задан `backoff`, он **заменяет `ack_wait` для повторных доставок**: первая доставка ждёт `ack_wait`, повтор N ждёт `backoff[N-1]` (если попыток больше, чем элементов, повторяется последнее значение);
+- backoff срабатывает **только по истечении таймера ack** (процесс упал, завис, не ответил). Если задан `backoff`, сервер **перезаписывает `ack_wait` значением `backoff[0]`**: после первой доставки ждём `backoff[0]`, после k-й — `backoff[k-1]` (если попыток больше, чем элементов, повторяется последнее значение). Поэтому `backoff[0]` должен покрывать время обработки (p99), иначе сообщение уйдёт на повтор, пока его ещё обрабатывают. В pedantic-режиме сервер не заменяет молча, а отклоняет конфиг, если `ack_wait` не равен `backoff[0]`;
+- `Nak()` backoff **не использует**: сообщение доставят заново сразу. `NakWithDelay(d)` ставит свою задержку, но на консьюмере с backoff сервер отсчитывает её со сдвигом (фактически `d + backoff[k-1] − backoff[0]`). Поэтому для повторов по ошибке выбери что-то одно: консьюмер без backoff и `NakWithDelay` с задержкой по номеру доставки (6.5) либо backoff и никакого ответа на временную ошибку;
 - `max_deliver` не может быть **меньше** числа элементов backoff (сервер отклонит конфиг). Сделай его на один больше, чтобы последняя задержка реально использовалась, прежде чем консьюмер сдастся.
 
-С флагами CLI выше (`linear`, 5 шагов, от 1s до 1m) natscli вычисляет равномерные задержки 1s, ~13s, ~25s, ~36s, ~48s: последний шаг остаётся ниже максимума. Проверить результат можно через `nats consumer info ORDERS BILLING`. Для своего расписания вроде 1s, 5s, 30s задай массив явно в коде (6.5) или в JSON-конфиге (`nats consumer add ORDERS --config billing.json`).
+С флагами CLI выше (`linear`, 5 шагов, от 30s до 5m) natscli вычисляет равномерные задержки 30s, 1m24s, 2m18s, 3m12s, 4m6s: последний шаг остаётся ниже максимума, а `ack_wait` станет равен первой задержке (здесь она совпадает с `--wait 30s`). Проверить результат можно через `nats consumer info ORDERS BILLING`. Для своего расписания вроде 30s, 1m, 5m задай массив явно в коде или в JSON-конфиге (`nats consumer add ORDERS --config billing.json`).
 
 ## 6.5 Pull-консьюмер на Go
 
@@ -1567,19 +1571,26 @@ cons, err := js.CreateOrUpdateConsumer(ctx, "ORDERS", jetstream.ConsumerConfig{
 	AckPolicy:     jetstream.AckExplicitPolicy,
 	DeliverPolicy: jetstream.DeliverAllPolicy,
 	MaxDeliver:    5,
-	AckWait:       30 * time.Second,
+	AckWait:       30 * time.Second, // ≈ p99 обработки: столько сервер ждёт ack до повтора
 	MaxAckPending: 500,
-	BackOff:       []time.Duration{time.Second, 5 * time.Second, 30 * time.Second},
+	// BackOff здесь нет: повторы по ошибке задаёт сам воркер через NakWithDelay (6.4)
 })
 if err != nil {
 	log.Fatal(err)
 }
 
+// задержки повторов: 1-я неудача ждёт 1s, 2-я 5s и т. д., последняя повторяется
+retryDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second, time.Minute}
+
 // вариант 1: колбэк (обычно то, что нужно)
 cc, err := cons.Consume(func(msg jetstream.Msg) {
 	if err := process(msg.Data()); err != nil {
 		if isTemporary(err) {
-			msg.NakWithDelay(5 * time.Second)
+			delay := retryDelays[len(retryDelays)-1]
+			if meta, err := msg.Metadata(); err == nil && int(meta.NumDelivered) <= len(retryDelays) {
+				delay = retryDelays[meta.NumDelivered-1]
+			}
+			msg.NakWithDelay(delay)
 		} else {
 			msg.Term() // не повторять никогда
 		}
@@ -1916,7 +1927,7 @@ Relay может опубликовать событие повторно (на�
 | Уведомления пользователю | JetStream, at-least-once, дубль не страшен |
 | Бизнес-события домена | JetStream + `Nats-Msg-Id` + outbox + идемпотентный консьюмер |
 | Деньги и списания | Всё вышеперечисленное + `processed_events` + double-ack |
-| Очередь задач | `workqueue`-стрим + `max_deliver` + DLQ |
+| Очередь задач | `workqueue`-стрим + `max_deliver` + DLQ (при `Term` публикуй в DLQ до `Term`, см. 14.3) |
 
 ### Вопросы для самопроверки
 
@@ -1977,7 +1988,7 @@ discard = new  : приехало новое -> отклоняем публик�
 
 ```hcl
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"
   max_memory_store: 4GB      # суммарно на сервер
   max_file_store: 500GB
 }
@@ -2198,7 +2209,7 @@ for range ticker.C {
 - ключи подчиняются правилам subjects: точка в ключе создаёт иерархию, пробелы запрещены;
 - нет запросов «найди по значению», нет вторичных индексов, нет транзакций между ключами;
 - `History` больше 64 не поддерживается;
-- удаление оставляет маркер (`purge` убирает его полностью).
+- удаление оставляет маркер; `purge` стирает историю ключа, но тоже оставляет один маркер PURGE (старые маркеры убирает `PurgeDeletes` в клиенте или `nats kv compact`).
 
 ### Практика
 
@@ -2447,7 +2458,7 @@ leafnodes {
   ]
 }
 
-jetstream { store_dir: "/data/js", domain: "edge-msk-42" }
+jetstream { store_dir: "/data", domain: "edge-msk-42" }
 ```
 
 Зачем это нужно:
@@ -2481,7 +2492,7 @@ nats --js-domain edge-msk-42 stream ls  # стримы на этом leaf-узл
 
 ```hcl
 server_name: "edge-msk-42"            # обязателен для MQTT
-jetstream { store_dir: "/data/js" }   # сессии MQTT и QoS 1 хранятся в JetStream
+jetstream { store_dir: "/data" }   # сессии MQTT и QoS 1 хранятся в JetStream
 
 mqtt {
   port: 1883
@@ -2503,7 +2514,7 @@ websocket {
 | QoS 0 | доставка Core NATS |
 | QoS 1, retained-сообщения, сессии | стримы JetStream, которые создаёт сервер |
 
-То есть устройство, публикующее в `factory/line1/temp`, видно NATS-сервисам в `factory.line1.temp`, и наоборот. Не используй точки в именах MQTT-топиков: они станут разделителями токенов.
+То есть устройство, публикующее в `factory/line1/temp`, видно NATS-сервисам в `factory.line1.temp`, и наоборот. Не используй точки в именах MQTT-топиков: сервер превращает `.` в `//`, и топик `factory/line.1` станет в NATS subject `factory.line//1`.
 
 Через WebSocket браузерный код использует официальный JavaScript-клиент и получает те же subjects, права и аккаунты, что и любой другой клиент.
 
@@ -2635,19 +2646,31 @@ nats stream add EDGE_TELEMETRY --config edge-telemetry.json
 ```bash
 nats consumer add ORDERS BILLING --pull --ack explicit \
   --max-deliver 6 \
-  --backoff linear --backoff-steps 5 --backoff-min 1s --backoff-max 5m
+  --backoff linear --backoff-steps 5 --backoff-min 30s --backoff-max 5m
 ```
 
 ```
-попытка 1 -> ошибка -> ждём 1s
-попытка 2 -> ошибка -> ждём ~1m
-попытка 3 -> ошибка -> ждём ~2m
-попытка 4 -> ошибка -> ждём ~3m
-попытка 5 -> ошибка -> ждём ~4m
-попытка 6 -> ошибка -> MAX_DELIVERIES advisory -> сообщение больше не доставляется
+доставка 1 -> нет ack (упал, завис, не успел) -> ждём 30s (backoff[0], он же теперь ack_wait)
+доставка 2 -> нет ack -> ждём ~1m24s
+доставка 3 -> нет ack -> ждём ~2m18s
+доставка 4 -> нет ack -> ждём ~3m12s
+доставка 5 -> нет ack -> ждём ~4m6s
+доставка 6 -> нет ack -> через ~4m6s MAX_DELIVERIES advisory -> сообщение больше не доставляется
 ```
 
-`linear` равномерно распределяет задержки от min к max (в natscli последняя задержка остаётся на шаг ниже max). Если нужно растущее расписание вроде 1s, 15s, 1m, 3m, 5m, задай массив явно (`BackOff` в коде или `"backoff"` в JSON-конфиге консьюмера). `max_deliver` не может быть меньше числа элементов backoff; здесь 6 попыток на 5 задержек используют их все.
+`linear` равномерно распределяет задержки от min к max (в natscli последняя задержка остаётся на шаг ниже max). Если нужно растущее расписание вроде 30s, 1m, 3m, 5m, 15m, задай массив явно (`BackOff` в коде или `"backoff"` в JSON-конфиге консьюмера). `max_deliver` не может быть меньше числа элементов backoff; здесь 6 попыток на 5 задержек используют их все.
+
+Это расписание работает, только пока воркер **молчит**. `Nak()` возвращает сообщение сразу, мимо backoff, так что обработчик, который на каждую ошибку делает `Nak()`, прокрутит все 6 попыток за миллисекунды. Если воркер сам распознаёт временную ошибку, возьми консьюмер без backoff (`ack_wait` ≈ p99 обработки) и считай задержку по номеру доставки:
+
+```go
+delays := []time.Duration{time.Second, 15 * time.Second, time.Minute, 3 * time.Minute, 5 * time.Minute}
+meta, err := msg.Metadata()
+if err != nil {
+	return // не JetStream-сообщение
+}
+n := min(int(meta.NumDelivered), len(delays))
+msg.NakWithDelay(delays[n-1])
+```
 
 Без backoff упавшая база получит шквал повторов ровно в тот момент, когда ей хуже всего.
 
@@ -2719,9 +2742,13 @@ mover.Consume(func(m jetstream.Msg) {
 		return
 	}
 	orig, err := stream.GetMsg(ctx, adv.StreamSeq)
-	if err != nil {
-		log.Println("оригинал уже удалён retention:", err)
+	if errors.Is(err, jetstream.ErrMsgNotFound) {
+		log.Println("оригинала уже нет (retention или Term на workqueue):", err)
 		m.Ack()
+		return
+	}
+	if err != nil {
+		m.NakWithDelay(5 * time.Second) // временная ошибка: попробуем позже
 		return
 	}
 
@@ -2740,8 +2767,9 @@ mover.Consume(func(m jetstream.Msg) {
 	if adv.Reason != "" {
 		h.Set("Dlq-Reason", adv.Reason)
 	}
-	// стабильный id делает само перекладывание идемпотентным при повторах
-	h.Set("Nats-Msg-Id", fmt.Sprintf("dlq-%s-%d", adv.Stream, adv.StreamSeq))
+	// стабильный id делает само перекладывание идемпотентным при повторах;
+	// имя консьюмера в нём, потому что одно сообщение могут не обработать несколько консьюмеров
+	h.Set("Nats-Msg-Id", fmt.Sprintf("dlq-%s-%s-%d", adv.Stream, adv.Consumer, adv.StreamSeq))
 
 	dlqMsg := &nats.Msg{
 		Subject: "dlq." + adv.Stream + "." + adv.Consumer,
@@ -2761,7 +2789,8 @@ mover.Consume(func(m jetstream.Msg) {
 Важно:
 
 - оригинал достаётся по `stream_seq`, так что схема работает, пока retention его не удалил: держи `max_age` исходного стрима заметно больше суммарного времени повторов;
-- при `workqueue` retention сообщение, исчерпавшее `max_deliver`, остаётся в стриме (его так и не подтвердили), поэтому здесь оно доступно, но продолжает занимать лимиты: при необходимости удаляй его после перекладывания;
+- **ловушка `workqueue` и `interest`**: на таких стримах `Term` равносилен ack, и сервер сразу удаляет сообщение (в `interest` — если других заинтересованных консьюмеров нет). К приходу `MSG_TERMINATED` оригинала уже нет, `GetMsg` вернёт «not found», и сообщение пропадёт. Поэтому здесь консьюмер сам публикует сообщение в DLQ (те же заголовки `Dlq-*` и тот же `Nats-Msg-Id`) и вызывает `Term` только после PubAck; так делает `dlq.Terminate` в [`examples/`](examples/). Другой вариант — держать стримы, которым нужна DLQ по `Term`, на `limits` retention;
+- сообщение, исчерпавшее `max_deliver`, сервер **не** подтверждает, поэтому и при `workqueue` оно остаётся в стриме и перекладчик его находит, но продолжает занимать лимиты: при необходимости удаляй его после перекладывания;
 - пользователю приложения нужно право подписываться на `$JS.EVENT.ADVISORY.>` в своём аккаунте (модуль 17).
 
 Повторная обработка после починки бага:
@@ -2809,7 +2838,7 @@ nats sub "$JS.EVENT.ADVISORY.>" --headers-only
 
 ### Практика
 
-1. Сделай обработчик, который всегда возвращает ошибку, и посмотри цепочку backoff.
+1. Сделай обработчик, который никогда не отвечает на сообщение (ни `Ack`, ни `Nak`), и посмотри цепочку backoff по `NumDelivered` и времени доставок. Затем замени молчание на `Nak()` и убедись, что backoff больше не действует: повторы идут сразу.
 2. Реализуй DLQ по схеме выше и убедись, что сообщение туда попадает. Затем останови перекладчик, вызови ошибку, запусти его снова и убедись, что сообщение всё равно дошло до DLQ.
 3. Отправь битый JSON и добейся, чтобы он ушёл в DLQ с первой попытки через `Term()`.
 
@@ -2840,9 +2869,9 @@ nats bench sub bench.core --msgs 1000000 --clients 5
 nats bench service serve bench.rpc --clients 5
 nats bench service request bench.rpc --msgs 100000 --clients 10
 
-# JetStream
-nats bench js pub ORDERS --msgs 200000 --size 512 --clients 5
-nats bench js pub ORDERS --msgs 200000 --size 512 --clients 5 --batch 500   # async
+# JetStream (--create создаёт тестовый стрим benchstream)
+nats bench js pub sync bench.js --create --msgs 200000 --size 512 --clients 5
+nats bench js pub async bench.js --create --msgs 200000 --size 512 --clients 5 --batch 500
 ```
 
 Всегда меряй **на своём железе, со своим размером сообщений и своей топологией**. Чужие цифры бесполезны.
@@ -2877,7 +2906,7 @@ ping_interval: "2m"
 ping_max: 2
 
 jetstream {
-  store_dir: "/data/jetstream"
+  store_dir: "/data"
   max_file_store: 500GB
   max_memory_store: 4GB
   sync_interval: "2m"     # как часто fsync (по умолчанию); "always" надёжнее, но кратно медленнее
@@ -2970,7 +2999,7 @@ curl -s "localhost:8222/healthz?js-enabled-only=true"
 | `jetstream_consumer_num_ack_pending` | Незакрытые ack |
 | `jetstream_consumer_num_redelivered` | Повторные доставки |
 | `jetstream_stream_total_bytes` / `total_messages` | Наполнение стрима |
-| `jetstream_server_jetstream_disk_used` | Свободное место |
+| `jetstream_server_jetstream_disk_used` | Занятое JetStream место на диске (сравнивай с `max_file_store`) |
 
 ## 16.3 Что алертить
 
@@ -3108,7 +3137,9 @@ nsc generate creds --account SHOP --name order-service > order-service.creds
 
 # сервер должен знать об операторе: один раз генерируем конфиг резолвера
 nsc generate config --nats-resolver --sys-account SYS > resolver.conf
-# добавь `include resolver.conf` в nats.conf, перезапусти сервер и загрузи аккаунты
+# добавь `include resolver.conf` в nats.conf и перезапусти сервер;
+# затем скажи nsc, куда пушить JWT аккаунтов, и загрузи их
+nsc edit operator --account-jwt-server-url nats://nats.company.com:4222
 nsc push --all
 ```
 
@@ -3145,14 +3176,20 @@ cluster {
 
 TLS настраивается отдельно для клиентов, routes, gateways и leafnodes. Внутрикластерный трафик шифруй тоже: route-соединение видит все сообщения кластера.
 
-При mTLS можно привязать пользователя к CN сертификата:
+При mTLS можно привязать пользователя к сертификату. С `verify_and_map` сервер ищет в списке `users` имя из SAN сертификата (email, DNS, URI), а если не нашёл, то полный subject DN, а не только CN. Пользователя, которого нет в списке, сервер не пустит:
 
 ```hcl
-authorization {
-  users: [ { nkey: "…" } ]
+tls {
+  # cert_file, key_file, ca_file ...
+  verify: true
+  verify_and_map: true
 }
-# или
-tls { verify_and_map: true }   # CN сертификата = имя пользователя
+authorization {
+  users: [
+    { user: "order-service@shop.example" }        # email или DNS из SAN
+    { user: "CN=billing,OU=payments,O=Shop" }     # или полный subject DN (RFC 2253)
+  ]
+}
 ```
 
 ## 17.6 Лимиты как часть безопасности
@@ -3164,7 +3201,12 @@ accounts {
       max_connections: 100
       max_subscriptions: 1000
       max_payload: 256KB
-      max_data: 10GB
+      max_leafnodes: 0
+    }
+    # объём данных ограничивают лимиты JetStream аккаунта
+    jetstream: {
+      max_file: 10GB
+      max_memory: 256MB
     }
   }
 }
@@ -3326,7 +3368,7 @@ NATS хорошо совместим по протоколу между мино
 
 1. Заказ создаётся по HTTP, событие публикуется в JetStream **в одной транзакции с записью в БД** (outbox).
 2. Каждое событие имеет `Nats-Msg-Id` и не дублируется при ретраях.
-3. Payment Service обрабатывает заказ идемпотентно, при временной ошибке делает `Nak` с backoff, при невалидных данных `Term`.
+3. Payment Service обрабатывает заказ идемпотентно, при временной ошибке делает `NakWithDelay` с задержкой, растущей по номеру доставки, при невалидных данных `Term`.
 4. Warehouse резервирует товар и умеет пережить повторную доставку.
 5. Analytics читает стрим ordered-консьюмером и строит проекцию в памяти.
 6. Notification отправляет уведомление через Core NATS в WebSocket-шлюз.
@@ -3354,7 +3396,7 @@ NATS хорошо совместим по протоколу между мино
 
 ```bash
 # нагрузка
-nats bench js pub ORDERS --msgs 100000 --size 512 --clients 5
+nats bench js pub async shop.orders.bench --stream ORDERS --msgs 100000 --size 512 --clients 5
 
 # во время нагрузки
 docker stop nats-2
@@ -3370,9 +3412,9 @@ nats consumer report ORDERS  # lag вырос и рассосался
 
 ---
 
-# Что нового в NATS 2.11 и 2.12
+# Что нового в NATS 2.11, 2.12, 2.14 и 2.15
 
-Модули выше опираются на функции, которые стабильны уже несколько лет. Последние релизы добавили возможности, меняющие подход к части задач курса. Имена полей и заголовков здесь не приводятся намеренно: перед использованием сверься с release notes и ADR для своих версий сервера и клиента.
+Модули выше опираются на функции, которые стабильны уже несколько лет. Последние релизы добавили возможности, меняющие подход к части задач курса. Имена полей и заголовков ниже даны для ориентира: перед использованием сверься с release notes и ADR для своих версий сервера и клиента.
 
 **NATS 2.11**
 
@@ -3385,6 +3427,22 @@ nats consumer report ORDERS  # lag вырос и рассосался
 
 - **Атомарная пакетная публикация.** Группа сообщений записывается в стрим целиком или не записывается вовсе, что помогает с событиями, которые должны появиться вместе.
 - **Распределённые счётчики.** Стрим можно настроить так, чтобы сообщения были инкрементами счётчика по subject, корректно сливающимися через mirrors и sources.
+
+**NATS 2.14** ([release notes](https://github.com/nats-io/nats-server/releases/tag/v2.14.0), 30 апреля 2026; версию 2.13 пропустили)
+
+- **Повторяющиеся расписания сообщений.** Заголовок `Nats-Schedule` принимает повторы (`@every 5m`, `@hourly`) и cron-подобный синтаксис.
+- **Сброс консьюмера.** Консьюмера можно вернуть на более раннюю последовательность через `$JS.API.CONSUMER.RESET.<stream>.<consumer>`, не удаляя и не пересоздавая его.
+- **Mirror и source из `interest`- и `workqueue`-стримов** теперь поддерживаются.
+- **Быстрая пакетная публикация** (fast-ingest batch) для клиентов, которые её поддерживают.
+- **Feature flags в конфиге сервера.** Флаг `js_ack_fc_v2` включает новые subjects для ack и flow control (`$JS.ACK.<domain>.<acchash>.…`); в 2.16 он станет включён по умолчанию, и ACL на ack-subjects придётся обновить.
+
+**NATS 2.15** ([release notes](https://github.com/nats-io/nats-server/releases/tag/v2.15.0), 17 сентября 2026)
+
+- **По умолчанию не больше 1000 консьюмеров на стрим**, если `max_consumers` не задан в стриме или в лимитах аккаунта. Существующих консьюмеров это не затрагивает, но новые сверх лимита не создадутся; серверный дефолт меняется через `default_max_consumers` в лимитах JetStream (`-1` отключает).
+- **Безопасный перенос и масштабирование реплик.** Новый движок желаемого состояния для метаслоя, отмена переноса стрима (`$JS.API.STREAM.CANCEL_MOVE`) и эвакуация стримов с узла перед обслуживанием (`$JS.API.SERVER.EVACUATE`).
+- **Спасение метаслоя** (`$JS.API.META.RESCUE`): временно снижает кворум, если узлы потеряны безвозвратно.
+- **Новый формат backup/restore стримов**, который сохраняет и нереплицированные консьюмеры на follower-узлах.
+- При `sync_interval: always` реплицированные стримы синхронизируют на диск только RAFT-лог, что заметно ускоряет запись.
 
 Если используешь что-то из этого, зафиксируй минимальную версию сервера в документации деплоя: старые серверы в смешанном кластере могут игнорировать или отвергать новые поля.
 
@@ -3493,7 +3551,7 @@ ack_policy: explicit
 ack_wait: 30s            (чуть больше p99 обработки)
 max_deliver: 5
 max_ack_pending: 500     (≈ числу воркеров × 10)
-backoff: 1s, 10s, 1m, 5m   (заменяет ack_wait для повторов; max_deliver >= 4, а 5 использует все задержки)
+backoff: 30s, 1m, 5m, 15m (необязательно: только для истёкшего ack wait; ack_wait станет backoff[0], Nak его не использует)
 filter_subject: конкретный subject
 ```
 
@@ -3544,12 +3602,12 @@ TLS везде: клиенты, routes, gateways, leafnodes
 15. **Почему один subject не может быть в двух стримах?** Иначе было бы неоднозначно, куда записывать сообщение; для копий есть mirror и source.
 16. **Как работает дедупликация?** Стрим помнит `Nats-Msg-Id` в течение `duplicate_window` и отвечает `PubAck{duplicate:true}` на повтор.
 17. **Как добиться exactly-once?** Дедупликация на публикации плюс идемпотентная обработка на стороне потребителя. Одной настройки не существует.
-18. **Pull или push консьюмер и почему?** Pull: естественный flow control, проще масштабировать, ничего не теряется при падении клиента.
+18. **Pull или push консьюмер и почему?** Pull: естественный flow control и простое горизонтальное масштабирование. По надёжности они равны: при `AckExplicit` неподтверждённое сообщение вернётся через `AckWait`, даже если клиент упал.
 19. **Как масштабировать обработку?** Несколько экземпляров на один durable pull-консьюмер; партиций и rebalance нет.
 20. **Как гарантировать порядок по сущности?** Отдельный subject на сущность и консьюмер с фильтром, либо шардирование по токену subject, либо `max_ack_pending=1`.
 21. **Что такое slow consumer?** Подписчик, который не успевает читать; сервер отбрасывает его сообщения и увеличивает счётчик в `/varz`.
 22. **Что такое `num_pending`?** Число сообщений, которые консьюмеру ещё предстоит получить, то есть lag.
-23. **Как сделать DLQ?** Подписаться на advisory `MAX_DELIVERIES`, достать оригинал по `stream_seq` и переложить в отдельный стрим.
+23. **Как сделать DLQ?** Складывать advisory `MAX_DELIVERIES` и `MSG_TERMINATED` в стрим, durable-консьюмером доставать оригинал по `stream_seq` и перекладывать в отдельный стрим. На `workqueue`/`interest`-стримах `Term` удаляет оригинал, поэтому там консьюмер сам публикует сообщение в DLQ перед `Term`.
 24. **Как устроен KV Store?** Это стрим с `max_msgs_per_subject` и subjects `$KV.<bucket>.>`, плюс клиентский API с версиями и watch.
 25. **Зачем нужны accounts?** Полная изоляция пространства subjects: multi-tenancy без отдельных кластеров.
 

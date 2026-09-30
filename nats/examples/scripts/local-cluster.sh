@@ -21,7 +21,7 @@ port: $((4221 + i))
 http: $((8221 + i))
 
 jetstream {
-  store_dir: "$DIR/nats-$i/jetstream"
+  store_dir: "$DIR/nats-$i"   # the server adds /jetstream itself
   max_memory_store: 1GB
   max_file_store: 10GB
 }

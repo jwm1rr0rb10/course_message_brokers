@@ -71,6 +71,7 @@ def test_abandon_increments_delivery_count(client):
     send(client, "tasks", marker)
     with client.get_queue_receiver("tasks") as r:
         first = find(r, marker)
+        assert first is not None
         r.abandon_message(first)
         again = find(r, marker)
         assert again is not None
@@ -84,7 +85,9 @@ def test_explicit_dead_letter(client):
     marker = uuid.uuid4().hex
     send(client, "tasks", marker)
     with client.get_queue_receiver("tasks") as r:
-        r.dead_letter_message(find(r, marker), reason="InvalidPayload", error_description="bad json")
+        m = find(r, marker)
+        assert m is not None
+        r.dead_letter_message(m, reason="InvalidPayload", error_description="bad json")
     with client.get_queue_receiver("tasks", sub_queue=ServiceBusSubQueue.DEAD_LETTER) as dlq:
         m = find(dlq, marker)
         assert m is not None

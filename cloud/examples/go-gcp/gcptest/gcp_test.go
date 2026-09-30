@@ -2,12 +2,14 @@
 
 // Package gcptest checks the Pub/Sub claims from module 8 against the Pub/Sub emulator.
 // It is a separate Go module because the Google Cloud client has a large dependency tree.
+// Tests skip themselves if the emulator is down (or fail, if COURSE_REQUIRE_BROKER=1 as in CI).
 package gcptest
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -40,7 +42,11 @@ func client(t *testing.T) *pubsub.Client {
 		t.Setenv("PUBSUB_EMULATOR_HOST", host)
 	}
 	if c, err := net.DialTimeout("tcp", host, 2*time.Second); err != nil {
-		t.Skipf("Pub/Sub emulator is not running on %s", host)
+		msg := fmt.Sprintf("Pub/Sub emulator is not running on %s", host)
+		if os.Getenv("COURSE_REQUIRE_BROKER") == "1" {
+			t.Fatal(msg + " (COURSE_REQUIRE_BROKER=1)")
+		}
+		t.Skip(msg)
 	} else {
 		_ = c.Close()
 	}
@@ -59,6 +65,9 @@ func topic(t *testing.T, c *pubsub.Client) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_ = c.TopicAdminClient.DeleteTopic(context.Background(), &pubsubpb.DeleteTopicRequest{Topic: tp.Name})
+	})
 	return tp.Name
 }
 
@@ -72,6 +81,9 @@ func subscription(t *testing.T, c *pubsub.Client, sub *pubsubpb.Subscription) (s
 	if err != nil {
 		return "", err
 	}
+	t.Cleanup(func() {
+		_ = c.SubscriptionAdminClient.DeleteSubscription(context.Background(), &pubsubpb.DeleteSubscriptionRequest{Subscription: s.Name})
+	})
 	return s.Name, nil
 }
 
